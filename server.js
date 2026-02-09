@@ -10,10 +10,16 @@ const studentRoutes = require('./routes/studentRoutes');
 const publicRoutes = require('./routes/publicRoutes');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000; // Render က ပေးတဲ့ Port ကို သုံးပါမယ်
 
 // --- MIDDLEWARE ---
-app.use(cors()); 
+// CORS Error မတက်အောင် Allow All လုပ်ထားပါမယ်
+app.use(cors({
+    origin: '*', 
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json({ limit: '5gb' }));
 app.use(express.urlencoded({ limit: '5gb', extended: true }));
 
@@ -169,4 +175,4 @@ const server = app.listen(port, async () => {
   console.log(`🚀 Server is running on port ${port}`);
   await ensureDatabaseSchema(); // Run the setup script on start
 });
-server.setTimeout(60 * 60 * 1000);
+server.setTimeout(60 * 60 * 1000); // Timeout ကို ၁ နာရီအထိ တိုးထားပါမယ်

@@ -1,14 +1,31 @@
 const { Pool } = require('pg');
+require('dotenv').config(); // .env ဖိုင်ရှိရင် ဖတ်မယ်
 
-// Neon Database Connection String
-// ⚠️ အောက်က '...' နေရာမှာ ဆရာ Copy ကူးလာတဲ့ Link ကို ထည့်ပါ
-const connectionString = 'postgresql://neondb_owner:npg_ycLvJ51aCfGQ@ep-frosty-band-a1h353ix-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'; 
+// Render (သို့) Local စက်ထဲက Environment Variable ကို ယူပါမယ်
+const connectionString = process.env.DATABASE_URL;
 
 const pool = new Pool({
   connectionString: connectionString,
   ssl: {
-    rejectUnauthorized: false, // Cloud Database ဖြစ်လို့ SSL ခွင့်ပြုရပါမယ်
+    rejectUnauthorized: false, // Neon Database (Cloud) အတွက် မဖြစ်မနေ လိုအပ်ပါတယ်
   },
+});
+
+// Connection စမ်းသပ်ခြင်း (Log ထုတ်ကြည့်ရန်)
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('🔥 Error acquiring client', err.stack);
+  } else {
+    console.log('✅ Connected to Database successfully!');
+    client.query('SELECT NOW()', (err, result) => {
+      release();
+      if (err) {
+        console.error('🔥 Error executing query', err.stack);
+      } else {
+        console.log(`🕒 Database Time: ${result.rows[0].now}`);
+      }
+    });
+  }
 });
 
 module.exports = pool;
