@@ -1,107 +1,127 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
-const upload = require('../config/upload');
+const pool = require('../db'); // Database Connection
+const bcrypt = require('bcryptjs'); // Password Hashing
+const multer = require('multer'); // Image Upload
+const cloudinary = require('cloudinary').v2;
+const streamifier = require('streamifier');
 
-router.get('/batches', async (req, res) => {
-    try {
-        const batches = await pool.query(`SELECT b.id, b.batch_name, c.title as course_name FROM batches b JOIN courses c ON b.course_id = c.id ORDER BY b.id DESC`);
-        res.json(batches.rows);
-    } catch (err) { res.status(500).send("Server Error"); }
+// --- Cloudinary Config (Environment Variables မှ ယူပါမည်) ---
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-router.get('/student-enrollments', async (req, res) => {
-    try {
-        const { student_id } = req.query;
-        const enrollments = await pool.query(`SELECT e.id, b.batch_name, c.title as course_name FROM enrollments e JOIN batches b ON e.batch_id = b.id JOIN courses c ON b.course_id = c.id WHERE e.student_id = $1`, [student_id]);
-        res.json(enrollments.rows);
-    } catch (err) { res.status(500).send("Server Error"); }
-});
+// Multer Setup (Memory Storage)
+const upload = multer({ storage: multer.memoryStorage() });
 
-router.post('/payment', upload.single('receipt_image'), async (req, res) => {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN'); 
-        const { student_id, batch_id, amount, payment_method, transaction_ref } = req.body;
-        const receiptPath = req.file ? `uploads/${req.file.filename}` : null;
-        const finalMethod = transaction_ref ? `${payment_method} (Ref: ${transaction_ref})` : payment_method;
+// --- Helper Function: Cloudinary Upload ---
+const uploadToCloudinary = (buffer) => {
+    return new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+            { folder: "students" },
+            (error, result) => {
+                if (result) resolve(result.secure_url);
+                else reject(error);
+            }
+        );
+        streamifier.createReadStream(buffer).pipe(uploadStream);
+    });
+};
 
-        let enrollment_id;
-        const checkEnroll = await client.query("SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2", [student_id, batch_id]);
-
-        if (checkEnroll.rows.length > 0) {
-            enrollment_id = checkEnroll.rows[0].id;
-        } else {
-            const newEnroll = await client.query("INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'active') RETURNING id", [student_id, batch_id]);
-            enrollment_id = newEnroll.rows[0].id;
-        }
-
-        await client.query("INSERT INTO payments (enrollment_id, amount, payment_method, status, payment_date, receipt_image) VALUES ($1, $2, $3, 'pending', CURRENT_TIMESTAMP, $4)", [enrollment_id, amount, finalMethod, receiptPath]);
-        await client.query('COMMIT'); 
-        res.json({ message: "Success" });
-    } catch (err) {
-        await client.query('ROLLBACK'); 
-        res.status(500).send("Server Error");
-    } finally { client.release(); }
-});
-
-router.post('/register', async (req, res) => {
-    try {
-        const { name, phone, date_of_birth, address, password } = req.body; 
-        const checkPhone = await pool.query('SELECT * FROM students WHERE phone_primary = $1', [phone]);
-        if (checkPhone.rows.length > 0) return res.status(400).json({ message: "Phone exists" });
-
-        const newStudent = await pool.query("INSERT INTO students (name, phone_primary, date_of_birth, address, password) VALUES ($1, $2, $3, $4, $5) RETURNING *", [name, phone, date_of_birth, address, password]);
-        res.json(newStudent.rows[0]);
-    } catch (err) { res.status(500).json({ message: "Server Error" }); }
-});
-
-router.post('/login', async (req, res) => {
-    try {
-        const { phone, password } = req.body;
-        const result = await pool.query('SELECT * FROM students WHERE phone_primary = $1 AND password = $2', [phone, password]);
-        if (result.rows.length === 0) return res.status(401).json({ message: "Login Failed" });
-        res.json(result.rows[0]); 
-    } catch (err) { res.status(500).send("Server Error"); }
-});
-
-router.get('/promo-courses', async (req, res) => {
-    try {
-        const courses = await pool.query(`SELECT b.id, b.batch_name, c.title as course_name, b.max_students, COUNT(e.id)::int as current_students FROM batches b JOIN courses c ON b.course_id = c.id LEFT JOIN enrollments e ON b.id = e.batch_id GROUP BY b.id, b.batch_name, c.title, b.max_students ORDER BY b.id DESC`);
-        const processedData = courses.rows.map(batch => ({ ...batch, is_full: batch.current_students >= batch.max_students, seats_left: batch.max_students - batch.current_students }));
-        res.json(processedData);
-    } catch (err) { res.status(500).send("Server Error"); }
-});
-
+// 1. GET Instructors (ဆရာများစာရင်း)
 router.get('/instructors', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM instructors ORDER BY id ASC');
-        res.json(result.rows);
-    } catch (err) { res.status(500).send("Server Error"); }
-});
-
-router.get('/lessons', async (req, res) => {
-    try {
-        const { batch_id } = req.query;
-        if (!batch_id) return res.status(400).json({ message: "Batch ID Required" });
-        const lessons = await pool.query("SELECT * FROM lessons WHERE batch_id = $1 ORDER BY id ASC", [batch_id]);
-        res.json(lessons.rows);
-    } catch (err) { 
-        if(err.code === '42P01') return res.json([]); 
-        res.status(500).send("Server Error"); 
+        // Sample Data သို့မဟုတ် DB ထဲကဆွဲထုတ်မည်
+        res.json([
+            { id: 1, name: "Tr. Myo", role: "Senior Developer", image: "https://via.placeholder.com/150" },
+            { id: 2, name: "Tr. Hla", role: "Database Expert", image: "https://via.placeholder.com/150" }
+        ]);
+    } catch (err) {
+        console.error("🔥 Error in GET /instructors:", err.message);
+        res.status(500).json({ message: "Server Error fetching instructors" });
     }
 });
 
-// Get Comments for a Lesson
-router.get('/comments', async (req, res) => {
+// 2. GET Promo Courses (ရှေ့ဆုံးမှာပြမည့် သင်တန်းများ)
+router.get('/promo-courses', async (req, res) => {
     try {
-        const { lesson_id } = req.query;
-        const result = await pool.query(
-            "SELECT * FROM comments WHERE lesson_id = $1 ORDER BY created_at ASC",
-            [lesson_id]
-        );
+        const result = await pool.query("SELECT * FROM courses LIMIT 3");
         res.json(result.rows);
-    } catch (err) { res.status(500).send("Server Error"); }
+    } catch (err) {
+        console.error("🔥 Error in GET /promo-courses:", err.message);
+        res.status(500).json({ message: "Server Error fetching courses" });
+    }
+});
+
+// 3. POST Register (ကျောင်းသားအသစ် စာရင်းသွင်းခြင်း)
+router.post('/register', upload.single('profileImage'), async (req, res) => {
+    console.log("➡️ Register Request Received:", req.body); // Debugging
+
+    const { name, phone, password, address } = req.body;
+
+    try {
+        // ၁။ ဖုန်းနံပါတ် ရှိ၊ မရှိ စစ်ခြင်း
+        const userCheck = await pool.query("SELECT * FROM students WHERE phone_primary = $1", [phone]);
+        if (userCheck.rows.length > 0) {
+            return res.status(400).json({ message: "This phone number is already registered!" });
+        }
+
+        // ၂။ Password ကို Hash လုပ်ခြင်း (လုံခြုံရေး)
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // ၃။ ပုံပါလာရင် Cloudinary တင်၊ မပါရင် Default ပုံထား
+        let profileImageUrl = "https://via.placeholder.com/150";
+        if (req.file) {
+            console.log("📸 Uploading image to Cloudinary...");
+            try {
+                profileImageUrl = await uploadToCloudinary(req.file.buffer);
+            } catch (uploadError) {
+                console.error("⚠️ Cloudinary Upload Failed:", uploadError);
+                // ပုံတင်မရလည်း Register ဆက်လုပ်ပေးပါမယ် (Error မတက်စေရန်)
+            }
+        }
+
+        // ၄။ Database ထဲ ထည့်ခြင်း
+        const newUser = await pool.query(
+            `INSERT INTO students (name, phone_primary, password, address, profile_image) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [name, phone, hashedPassword, address, profileImageUrl]
+        );
+
+        console.log("✅ New Student Registered:", newUser.rows[0].name);
+        res.status(201).json({ message: "Registration Successful!", user: newUser.rows[0] });
+
+    } catch (err) {
+        console.error("🔥 Error in POST /register:", err); // Render Log မှာ အနီရောင်နဲ့ ပေါ်ပါမယ်
+        res.status(500).json({ message: "Server Error: " + err.message });
+    }
+});
+
+// 4. POST Login (အကောင့်ဝင်ခြင်း)
+router.post('/login', async (req, res) => {
+    const { phone, password } = req.body;
+    try {
+        const userResult = await pool.query("SELECT * FROM students WHERE phone_primary = $1", [phone]);
+
+        if (userResult.rows.length === 0) {
+            return res.status(400).json({ message: "Phone number not found!" });
+        }
+
+        const user = userResult.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+            return res.status(400).json({ message: "Invalid Password!" });
+        }
+
+        res.json({ message: "Login Successful", user: { id: user.id, name: user.name, role: "student" } });
+
+    } catch (err) {
+        console.error("🔥 Error in POST /login:", err.message);
+        res.status(500).json({ message: "Server Error during login" });
+    }
 });
 
 module.exports = router;
