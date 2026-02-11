@@ -56,7 +56,7 @@ router.get('/promo-courses', async (req, res) => {
 });
 
 // ============================================
-// 🆕 3. GET All Batches (Payment Dropdown အတွက် အသစ်ထည့်သော Route)
+// 3. GET All Batches (Payment Dropdown အတွက်)
 // ============================================
 router.get('/batches', async (req, res) => {
     try {
@@ -143,12 +143,14 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================
-// 🆕 6. POST Payment Upload (ငွေလွှဲပြေစာ တင်ခြင်း)
+// 🆕 6. POST Payment Upload (ငွေလွှဲပြေစာ တင်ခြင်း - Updated with Transaction ID)
 // ============================================
 router.post('/payment-upload', upload.single('receipt'), async (req, res) => {
     try {
         console.log("➡️ Payment Request:", req.body);
-        const { student_id, batch_id, amount, payment_method } = req.body;
+        
+        // transaction_id ကို Frontend မှ လက်ခံရယူခြင်း
+        const { student_id, batch_id, amount, payment_method, transaction_id } = req.body;
 
         // ၁။ Enrollment အရင်လုပ်ပါ (Pending အနေနဲ့)
         const enrollment = await pool.query(
@@ -163,17 +165,18 @@ router.post('/payment-upload', upload.single('receipt'), async (req, res) => {
             receiptUrl = await uploadToCloudinary(req.file.buffer);
         }
 
-        // ၃။ Payment Table မှာ မှတ်တမ်းတင်ပါ
+        // ၃။ Payment Table မှာ မှတ်တမ်းတင်ပါ (transaction_id ပါ ထည့်သွင်းခြင်း)
         await pool.query(
-            "INSERT INTO payments (enrollment_id, amount, payment_method, receipt_image, status) VALUES ($1, $2, $3, $4, 'pending')",
-            [enrollment_id, amount, payment_method, receiptUrl]
+            `INSERT INTO payments (enrollment_id, amount, payment_method, receipt_image, status, transaction_id) 
+             VALUES ($1, $2, $3, $4, 'pending', $5)`,
+            [enrollment_id, amount, payment_method, receiptUrl, transaction_id]
         );
 
         res.json({ message: "Payment Submitted Successfully!" });
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Payment Upload Failed" });
+        console.error("🔥 Payment Error:", err.message);
+        res.status(500).json({ message: "Payment Upload Failed: " + err.message });
     }
 });
 
