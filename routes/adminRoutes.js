@@ -39,31 +39,39 @@ const verifyPaymentHandler = async (req, res) => {
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- 2. REJECT PAYMENT LOGIC ---
+// --- REJECT PAYMENT LOGIC (Status နှစ်ခုလုံးကို တိကျစွာ ပြောင်းလဲမည်) ---
 const rejectPaymentHandler = async (req, res) => {
     const client = await pool.connect();
     try {
         const { id } = req.params;
         await client.query('BEGIN');
 
+        // 1. payments table status ကို 'rejected' သို့ ပြောင်းမည်
         const paymentUpdate = await client.query(
-            "UPDATE payments SET status = 'rejected' WHERE id = $1 RETURNING *", [id]
+            "UPDATE payments SET status = 'rejected' WHERE id = $1 RETURNING *", 
+            [id]
         );
 
         if (paymentUpdate.rows.length === 0) {
              await client.query('ROLLBACK');
-             return res.status(404).json({ message: "Payment not found" });
+             return res.status(404).json({ message: "Payment record not found" });
         }
 
         const enrollmentId = paymentUpdate.rows[0].enrollment_id;
+        
+        // 2. enrollments table status ကိုပါ 'rejected' သို့ တစ်ပါတည်း ပြောင်းမည်
         if (enrollmentId) {
-            await client.query("UPDATE enrollments SET status = 'rejected' WHERE id = $1", [enrollmentId]);
+            await client.query(
+                "UPDATE enrollments SET status = 'rejected', expire_date = (NOW() - INTERVAL '1 day') WHERE id = $1", 
+                [enrollmentId]
+            );
         }
 
         await client.query('COMMIT');
-        res.json(paymentUpdate.rows[0]);
+        res.json({ message: "Payment Rejected Successfully" });
     } catch (err) {
         await client.query('ROLLBACK');
+        console.error("🔥 Reject Error:", err.message);
         res.status(500).json({ message: err.message });
     } finally { client.release(); }
 };
