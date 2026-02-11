@@ -40,12 +40,14 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 3. Get Payments
+// 3. Get Payments (✅ UPDATED: Added transaction_id)
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
+        
+        // ⚠️ ပြင်ဆင်ချက်: p.transaction_id ကို SELECT တွင် ထပ်ထည့်ထားသည်
         const query = `
-          SELECT p.id, p.amount, p.payment_method, p.payment_date, p.status, p.receipt_image,
+          SELECT p.id, p.transaction_id, p.amount, p.payment_method, p.payment_date, p.status, p.receipt_image,
                  c.title as course_name, b.batch_name, b.id as batch_id, e.expire_date, e.status as enrollment_status
           FROM payments p 
           JOIN enrollments e ON p.enrollment_id = e.id 
@@ -54,10 +56,14 @@ router.get('/payments', async (req, res) => {
           JOIN courses c ON b.course_id = c.id
           WHERE s.phone_primary = $1 ORDER BY p.payment_date DESC
         `;
+        
         const result = await pool.query(query, [phone]);
         const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
         res.json(fixedRows);
-    } catch (err) { res.status(500).send('Server Error'); }
+    } catch (err) { 
+        console.error(err);
+        res.status(500).send('Server Error'); 
+    }
 });
 
 // 4. Get Exams
@@ -139,14 +145,14 @@ router.post('/enroll', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 8. Make Payment
+// 8. Make Payment (Updated with transaction_id if provided)
 router.post('/payments', async (req, res) => {
     try {
-        const { phone, amount, payment_method } = req.body;
+        const { phone, amount, payment_method, transaction_id } = req.body; // transaction_id ကို လက်ခံနိုင်အောင်ဖြည့်
         const enrollmentCheck = await pool.query(`SELECT id FROM enrollments WHERE student_id = (SELECT id FROM students WHERE phone_primary = $1) ORDER BY joined_at DESC LIMIT 1`, [phone]);
         if (enrollmentCheck.rows.length === 0) return res.status(404).json({ message: "Enrollment not found" });
         
-        const newPayment = await pool.query(`INSERT INTO payments (enrollment_id, amount, payment_method, status, payment_date) VALUES ($1, $2, $3, 'verified', CURRENT_TIMESTAMP) RETURNING *`, [enrollmentCheck.rows[0].id, amount, payment_method]);
+        const newPayment = await pool.query(`INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, status, payment_date) VALUES ($1, $2, $3, $4, 'verified', CURRENT_TIMESTAMP) RETURNING *`, [enrollmentCheck.rows[0].id, amount, payment_method, transaction_id]);
         res.json(newPayment.rows[0]);
     } catch (err) { res.status(500).send("Server Error"); }
 });
