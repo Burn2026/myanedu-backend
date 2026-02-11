@@ -4,13 +4,13 @@ const pool = require('../db'); // database connection
 const upload = require('../config/upload'); // multer config (Cloudinary)
 const { cleanImagePath } = require('../utils/helpers');
 
-// --- VERIFY PAYMENT LOGIC (အတည်ပြုခြင်းအပိုင်းကို ပိုမိုခိုင်မာအောင် ပြင်ဆင်ထားသည်) ---
+// --- VERIFY PAYMENT LOGIC ---
 const verifyPaymentHandler = async (req, res) => {
     try {
         const { id } = req.params;
         console.log(`🔄 [Verify] Processing Payment ID: ${id}`);
 
-        // 1. Update Payment Status (RETURNING * ကို သုံး၍ အချက်အလက်များ ပြန်ယူမည်)
+        // 1. Update Payment Status to 'verified'
         const paymentUpdate = await pool.query(
             "UPDATE payments SET status = 'verified' WHERE id = $1 RETURNING *",
             [id]
@@ -23,14 +23,13 @@ const verifyPaymentHandler = async (req, res) => {
         const updatedPayment = paymentUpdate.rows[0];
         const enrollmentId = updatedPayment.enrollment_id;
 
-        // 2. Enrollment ကို Active ဖြစ်အောင်လုပ်ပြီး ရက်ပေါင်း ၃၀ သက်တမ်းတိုးမည်
+        // 2. Update Enrollment to 'active' and extend expiry
         if (enrollmentId) {
             await pool.query(
                 `UPDATE enrollments SET expire_date = NOW() + INTERVAL '30 days', status = 'active' WHERE id = $1`,
                 [enrollmentId]
             );
             
-            // 3. ကျောင်းသားထံသို့ Notification ပို့ခြင်း
             try {
                 const enrollmentInfo = await pool.query(
                     `SELECT e.student_id, b.batch_name, c.title as course_name 
@@ -56,11 +55,11 @@ const verifyPaymentHandler = async (req, res) => {
         res.json({ message: "Payment Verified Successfully", payment: updatedPayment });
     } catch (err) {
         console.error("🔥 [Verify] ERROR:", err.message);
-        res.status(500).json({ message: "Internal Server Error: " + err.message });
+        res.status(500).json({ message: "Internal Server Error" });
     }
 };
 
-// --- REJECT PAYMENT LOGIC (ငြင်းပယ်ခြင်းအပိုင်း) ---
+// --- REJECT PAYMENT LOGIC (Fixing the 'verified' status bug) ---
 const rejectPaymentHandler = async (req, res) => {
     const client = await pool.connect();
     try {
@@ -68,7 +67,7 @@ const rejectPaymentHandler = async (req, res) => {
         console.log(`❌ [Reject] Processing Payment ID: ${id}`);
         await client.query('BEGIN');
 
-        // 1. Payment Status ကို rejected ပြောင်းမည်
+        // 1. Update Payment Status to 'rejected'
         const paymentUpdate = await client.query(
             "UPDATE payments SET status = 'rejected' WHERE id = $1 RETURNING *", 
             [id]
@@ -81,7 +80,7 @@ const rejectPaymentHandler = async (req, res) => {
 
         const enrollmentId = paymentUpdate.rows[0].enrollment_id;
         
-        // 2. Enrollment ကို ပိတ်သိမ်းခြင်း
+        // 2. Update Enrollment to 'rejected' and expire it
         if (enrollmentId) {
             await client.query(
                 "UPDATE enrollments SET status = 'rejected', expire_date = (NOW() - INTERVAL '1 day') WHERE id = $1", 
@@ -118,7 +117,7 @@ const rejectPaymentHandler = async (req, res) => {
 };
 
 // ==========================================
-// COURSE & BATCH MANAGEMENT
+// COURSE, BATCH & STUDENT MANAGEMENT
 // ==========================================
 
 router.post('/courses', async (req, res) => {
@@ -217,7 +216,6 @@ router.delete('/exams/:id', async (req, res) => {
 
 // --- PAYMENT & STATS ROUTES ---
 
-// (New Mapping) PUT /admin/payments/:id အတွက် Logic ခွဲခြားခြင်း
 router.put('/payments/:id', async (req, res) => {
     const { status } = req.body;
     if (status === 'verified') return verifyPaymentHandler(req, res);
@@ -225,7 +223,6 @@ router.put('/payments/:id', async (req, res) => {
     res.status(400).json({ message: "Invalid status provided" });
 });
 
-// လက်ရှိ Verify Payment tab တွင် ခလုတ်နှိပ်၍မရပါက ဤအောက်ပါ Route ဟောင်း ၂ ခုကိုပါ တစ်ပါတည်း ထားရှိပေးထားသည်
 router.put('/verify-payment/:id', verifyPaymentHandler);
 router.put('/reject-payment/:id', rejectPaymentHandler);
 
@@ -255,6 +252,7 @@ router.get('/payments', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
+// --- LESSON MANAGEMENT ---
 router.post('/lessons', upload.single('video_file'), async (req, res) => {
     try {
         const { batch_id, title, description } = req.body;
@@ -272,7 +270,7 @@ router.delete('/lessons/:id', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// --- DATABASE FIX ROUTE (Run This if still issues) ---
+// --- DATABASE FIX ---
 router.get('/fix-database', async (req, res) => {
     try {
         await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(50)");
