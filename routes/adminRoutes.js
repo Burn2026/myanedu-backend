@@ -87,6 +87,55 @@ const rejectPaymentHandler = async (req, res) => {
     } finally { client.release(); }
 };
 
+// ==========================================
+// 🆕 NEW FEATURES ADDED BELOW (Course & Batch)
+// ==========================================
+
+// 1. Create New Course
+router.post('/courses', async (req, res) => {
+    try {
+        const { title, description } = req.body;
+        const newCourse = await pool.query(
+            "INSERT INTO courses (title, description) VALUES ($1, $2) RETURNING *",
+            [title, description]
+        );
+        res.json(newCourse.rows[0]);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json("Error creating course");
+    }
+});
+
+// 2. Create New Batch
+router.post('/batches', async (req, res) => {
+    try {
+        const { id, course_id, batch_name, fees } = req.body;
+        const newBatch = await pool.query(
+            "INSERT INTO batches (id, course_id, batch_name, fees) VALUES ($1, $2, $3, $4) RETURNING *",
+            [id, course_id, batch_name, fees]
+        );
+        res.json(newBatch.rows[0]);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json("Error creating batch");
+    }
+});
+
+// 3. Get All Students (For Manage Students Tab)
+router.get('/students', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM students ORDER BY created_at DESC");
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send("Server Error fetching students");
+    }
+});
+
+// ==========================================
+// EXISTING FEATURES CONTINUED...
+// ==========================================
+
 // --- DISCUSSION ROUTES ---
 router.get('/discussions', async (req, res) => {
     try {
