@@ -88,10 +88,10 @@ const rejectPaymentHandler = async (req, res) => {
 };
 
 // ==========================================
-// 🆕 NEW FEATURES ADDED BELOW (Course & Batch)
+// COURSE & BATCH MANAGEMENT
 // ==========================================
 
-// 1. Create New Course
+// Create New Course
 router.post('/courses', async (req, res) => {
     try {
         const { title, description } = req.body;
@@ -106,7 +106,7 @@ router.post('/courses', async (req, res) => {
     }
 });
 
-// 2. Create New Batch
+// Create New Batch
 router.post('/batches', async (req, res) => {
     try {
         const { id, course_id, batch_name, fees } = req.body;
@@ -121,7 +121,7 @@ router.post('/batches', async (req, res) => {
     }
 });
 
-// 3. Get All Students (For Manage Students Tab)
+// Get All Students
 router.get('/students', async (req, res) => {
     try {
         const result = await pool.query("SELECT * FROM students ORDER BY created_at DESC");
@@ -131,10 +131,6 @@ router.get('/students', async (req, res) => {
         res.status(500).send("Server Error fetching students");
     }
 });
-
-// ==========================================
-// EXISTING FEATURES CONTINUED...
-// ==========================================
 
 // --- DISCUSSION ROUTES ---
 router.get('/discussions', async (req, res) => {
@@ -183,7 +179,6 @@ router.post('/comments', async (req, res) => {
 
 // --- EXAM MANAGEMENT ROUTES ---
 
-// 1. Get All Exams
 router.get('/exams', async (req, res) => {
     try {
         const result = await pool.query(`
@@ -199,7 +194,6 @@ router.get('/exams', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 2. Get Student's Enrolled Batches by Phone
 router.get('/student-batches', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -219,25 +213,21 @@ router.get('/student-batches', async (req, res) => {
     }
 });
 
-// 3. Add New Exam Result
 router.post('/exams', async (req, res) => {
     try {
         const { enrollment_id, exam_title, marks_obtained, total_marks, grade } = req.body;
-
         const newExam = await pool.query(
             `INSERT INTO exam_results (enrollment_id, exam_title, marks_obtained, total_marks, grade) 
              VALUES ($1, $2, $3, $4, $5) RETURNING *`,
             [enrollment_id, exam_title, marks_obtained, total_marks, grade]
         );
         res.json(newExam.rows[0]);
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Server Error: " + err.message });
     }
 });
 
-// 4. Delete Exam Result
 router.delete('/exams/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -270,10 +260,11 @@ router.get('/charts', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
+// GET /payments (Updated to include transaction_id)
 router.get('/payments', async (req, res) => {
     try {
         const query = `
-          SELECT p.id, p.amount, p.payment_method, p.payment_date, p.status, p.receipt_image,
+          SELECT p.id, p.amount, p.payment_method, p.payment_date, p.status, p.receipt_image, p.transaction_id,
                  s.name as student_name, s.phone_primary, c.title as course_name, b.batch_name
           FROM payments p
           JOIN enrollments e ON p.enrollment_id = e.id
@@ -285,18 +276,18 @@ router.get('/payments', async (req, res) => {
         const result = await pool.query(query);
         const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
         res.json(fixedRows);
-    } catch (err) { res.status(500).send("Server Error"); }
+    } catch (err) { 
+        console.error(err);
+        res.status(500).send("Server Error"); 
+    }
 });
 
-// POST /lessons (Updated for Cloudinary)
+// POST /lessons
 router.post('/lessons', upload.single('video_file'), async (req, res) => {
     try {
         const { batch_id, title, description } = req.body;
         if (!req.file) return res.status(400).json({ message: "No Video File" });
-        
-        // (UPDATED) Use Cloudinary URL directly from req.file.path
         const videoPath = req.file.path; 
-
         const newLesson = await pool.query("INSERT INTO lessons (batch_id, title, video_url, description) VALUES ($1, $2, $3, $4) RETURNING *", [batch_id, title, videoPath, description]);
         res.json(newLesson.rows[0]);
     } catch (err) { res.status(500).json({ message: "DB Error" }); }
@@ -307,6 +298,17 @@ router.delete('/lessons/:id', async (req, res) => {
         await pool.query("DELETE FROM lessons WHERE id = $1", [req.params.id]);
         res.json("Deleted!");
     } catch (err) { res.status(500).send("Server Error"); }
+});
+
+// --- DATABASE FIX ROUTE ---
+router.get('/fix-database', async (req, res) => {
+    try {
+        await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(50)");
+        res.send("<h1 style='color:green;'>✅ Database Updated Successfully!</h1>");
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("❌ Error: " + err.message);
+    }
 });
 
 module.exports = router;
