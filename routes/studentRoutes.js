@@ -4,6 +4,30 @@ const pool = require('../db');
 const upload = require('../config/upload'); // multer config (Cloudinary)
 const { cleanImagePath } = require('../utils/helpers');
 
+// --- SYSTEM FIX ROUTES (Database ပြင်ဆင်ရန်) ---
+// ⚠️ Browser တွင် ဤလမ်းကြောင်းကို တစ်ကြိမ် Run ပေးပါ: https://myanedu-backend.onrender.com/students/fix-fees
+router.get('/fix-fees', async (req, res) => {
+    try {
+        // fees column မရှိသေးလျှင် ထည့်မည်
+        await pool.query(`
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='batches' AND column_name='fees') THEN 
+                    ALTER TABLE batches ADD COLUMN fees DECIMAL(10,2) DEFAULT 0; 
+                END IF;
+            END $$;
+        `);
+        
+        // ဈေးနှုန်းများကို Default 30,000 ဟု ယာယီသတ်မှတ်မည် (Admin Panel တွင် ပြန်ပြင်နိုင်သည်)
+        await pool.query("UPDATE batches SET fees = 30000 WHERE fees IS NULL OR fees = 0");
+        
+        res.send("✅ Success: 'fees' column added to batches table and updated!");
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error updating DB: " + err.message);
+    }
+});
+
 // --- NOTIFICATION ROUTES ---
 router.get('/:id/notifications', async (req, res) => {
     try {
@@ -40,7 +64,7 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// ✅ (NEW ROUTE) Get Active Batches with Fees for Payment Dropdown
+// ✅ (UPDATED) Get Active Batches with Fees for Payment Dropdown
 // ဤ Route သည် Frontend တွင် အတန်းရွေးရန်နှင့် ဈေးနှုန်းပြရန် အလုပ်လုပ်ပါမည်
 router.get('/active-batches', async (req, res) => {
     try {
@@ -55,8 +79,9 @@ router.get('/active-batches', async (req, res) => {
         const result = await pool.query(query);
         res.json(result.rows);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Server Error");
+        console.error("🔥 Active Batches Error:", err.message);
+        // Column မရှိသေးလျှင် Frontend ကို သတိပေးမည်
+        res.status(500).json({ error: err.message, hint: "Please run /students/fix-fees route once." });
     }
 });
 
@@ -160,7 +185,7 @@ router.post('/enroll', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 8. Make Payment
+// 8. Make Payment (Updated Logic)
 router.post('/payments', async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
