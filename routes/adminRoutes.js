@@ -4,6 +4,30 @@ const pool = require('../db');
 const upload = require('../config/upload'); // Cloudinary/Multer config
 const { cleanImagePath } = require('../utils/helpers');
 
+// --- SYSTEM FIX ROUTE (Batch Status ပြင်ဆင်ရန်) ---
+// ⚠️ Browser တွင် ဤလမ်းကြောင်းကို တစ်ကြိမ် Run ပေးပါ: /admin/fix-batch-status
+router.get('/fix-batch-status', async (req, res) => {
+    try {
+        // Status column မရှိသေးရင် ထည့်မယ်
+        await pool.query(`
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='batches' AND column_name='status') THEN 
+                    ALTER TABLE batches ADD COLUMN status VARCHAR(20) DEFAULT 'active'; 
+                END IF;
+            END $$;
+        `);
+        
+        // ရှိပြီးသား အတန်းအားလုံးကို 'active' ဟု ပြောင်းမည် (ဒါမှ ကျောင်းသားမြင်ရမည်)
+        await pool.query("UPDATE batches SET status = 'active' WHERE status IS NULL OR status = ''");
+        
+        res.send("✅ Success: All batches are now ACTIVE and visible to students!");
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error updating DB: " + err.message);
+    }
+});
+
 // --- 1. VERIFY PAYMENT LOGIC ---
 const verifyPaymentHandler = async (req, res) => {
     try {
@@ -39,7 +63,7 @@ const verifyPaymentHandler = async (req, res) => {
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- REJECT PAYMENT LOGIC (Status နှစ်ခုလုံးကို တိကျစွာ ပြောင်းလဲမည်) ---
+// --- REJECT PAYMENT LOGIC ---
 const rejectPaymentHandler = async (req, res) => {
     const client = await pool.connect();
     try {
@@ -77,6 +101,18 @@ const rejectPaymentHandler = async (req, res) => {
 };
 
 // --- 3. COURSE & BATCH ROUTES ---
+router.get('/batches', async (req, res) => {
+    try {
+        // Admin က အတန်းအားလုံး (Active/Inactive) ကြည့်နိုင်အောင်
+        const result = await pool.query(`
+            SELECT b.*, c.title as course_name 
+            FROM batches b JOIN courses c ON b.course_id = c.id 
+            ORDER BY b.created_at DESC
+        `);
+        res.json(result.rows);
+    } catch (err) { res.status(500).send("Error"); }
+});
+
 router.post('/courses', async (req, res) => {
     try {
         const { title, description } = req.body;
@@ -85,11 +121,30 @@ router.post('/courses', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
+// ✅ (UPDATED) Create Batch with Status and Fees
 router.post('/batches', async (req, res) => {
     try {
         const { id, course_id, batch_name, fees } = req.body;
-        const result = await pool.query("INSERT INTO batches (id, course_id, batch_name, fees) VALUES ($1, $2, $3, $4) RETURNING *", [id, course_id, batch_name, fees]);
+        // Status ကို Default 'active' ဟု သတ်မှတ်မည်
+        const result = await pool.query(
+            "INSERT INTO batches (id, course_id, batch_name, fees, status) VALUES ($1, $2, $3, $4, 'active') RETURNING *", 
+            [id, course_id, batch_name, fees]
+        );
         res.json(result.rows[0]);
+    } catch (err) { res.status(500).json(err.message); }
+});
+
+// ✅ (NEW) Update Batch (For Admin to change Fees/Status)
+router.put('/batches/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { batch_name, fees, status } = req.body;
+        
+        await pool.query(
+            "UPDATE batches SET batch_name = $1, fees = $2, status = $3 WHERE id = $4",
+            [batch_name, fees, status, id]
+        );
+        res.json({ message: "Batch Updated Successfully" });
     } catch (err) { res.status(500).json(err.message); }
 });
 
@@ -109,7 +164,7 @@ router.get('/stats', async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 });
 
-// --- 5. PAYMENT ROUTES (With Transaction ID) ---
+// --- 5. PAYMENT ROUTES ---
 router.get('/payments', async (req, res) => {
     try {
         const query = `
