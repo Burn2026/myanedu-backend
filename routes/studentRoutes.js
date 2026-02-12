@@ -40,12 +40,30 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 3. Get Payments (✅ UPDATED: Added transaction_id)
+// ✅ (NEW ROUTE) Get Active Batches with Fees for Payment Dropdown
+// ဤ Route သည် Frontend တွင် အတန်းရွေးရန်နှင့် ဈေးနှုန်းပြရန် အလုပ်လုပ်ပါမည်
+router.get('/active-batches', async (req, res) => {
+    try {
+        // batches ဇယားနှင့် courses ဇယားကို တွဲပြီး ဈေးနှုန်း (fees) ပါ ယူမည်
+        const query = `
+            SELECT b.id, b.batch_name, b.fees, c.title as course_name 
+            FROM batches b
+            JOIN courses c ON b.course_id = c.id
+            WHERE b.status = 'active' OR b.status = 'open'
+            ORDER BY c.title ASC
+        `;
+        const result = await pool.query(query);
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Server Error");
+    }
+});
+
+// 3. Get Payments
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
-        
-        // ⚠️ ပြင်ဆင်ချက်: p.transaction_id ကို SELECT တွင် ထပ်ထည့်ထားသည်
         const query = `
           SELECT p.id, p.transaction_id, p.amount, p.payment_method, p.payment_date, p.status, p.receipt_image,
                  c.title as course_name, b.batch_name, b.id as batch_id, e.expire_date, e.status as enrollment_status
@@ -56,7 +74,6 @@ router.get('/payments', async (req, res) => {
           JOIN courses c ON b.course_id = c.id
           WHERE s.phone_primary = $1 ORDER BY p.payment_date DESC
         `;
-        
         const result = await pool.query(query, [phone]);
         const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
         res.json(fixedRows);
@@ -88,7 +105,7 @@ router.get('/exams', async (req, res) => {
     }
 });
 
-// 5. Update Student Profile (Updated for Cloudinary)
+// 5. Update Student Profile
 router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -105,8 +122,6 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
         }
 
         let newImage = oldData.profile_image;
-        
-        // (UPDATED) Use Cloudinary URL directly
         if (req.file) newImage = req.file.path; 
 
         await pool.query("UPDATE students SET name=$1, password=$2, address=$3, profile_image=$4 WHERE id=$5", [name || oldData.name, finalPassword, address || oldData.address, newImage, id]);
@@ -145,16 +160,58 @@ router.post('/enroll', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 8. Make Payment (Updated with transaction_id if provided)
+// 8. Make Payment
 router.post('/payments', async (req, res) => {
     try {
-        const { phone, amount, payment_method, transaction_id } = req.body; // transaction_id ကို လက်ခံနိုင်အောင်ဖြည့်
-        const enrollmentCheck = await pool.query(`SELECT id FROM enrollments WHERE student_id = (SELECT id FROM students WHERE phone_primary = $1) ORDER BY joined_at DESC LIMIT 1`, [phone]);
-        if (enrollmentCheck.rows.length === 0) return res.status(404).json({ message: "Enrollment not found" });
+        const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
         
-        const newPayment = await pool.query(`INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, status, payment_date) VALUES ($1, $2, $3, $4, 'verified', CURRENT_TIMESTAMP) RETURNING *`, [enrollmentCheck.rows[0].id, amount, payment_method, transaction_id]);
+        // ကျောင်းသား ID ရှာမည်
+        const studentRes = await pool.query("SELECT id FROM students WHERE phone_primary = $1", [phone]);
+        if (studentRes.rows.length === 0) return res.status(404).json({ message: "Student not found" });
+        const studentId = studentRes.rows[0].id;
+
+        // Enrollment ရှိမရှိ စစ်ဆေးခြင်း (batch_id ပါပါက ထို batch အတွက် enrollment ရှာမည်)
+        let enrollmentId;
+        
+        if (batch_id) {
+            // Batch ID ပါလာလျှင် Enrollment အသစ်လုပ်ရန် လိုမလို စစ်ဆေးမည်
+            const existingEnrollment = await pool.query(
+                "SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2",
+                [studentId, batch_id]
+            );
+
+            if (existingEnrollment.rows.length > 0) {
+                enrollmentId = existingEnrollment.rows[0].id;
+            } else {
+                // Enrollment မရှိသေးပါက အသစ်ဖန်တီးမည် (Auto Enroll)
+                const newEnrollment = await pool.query(
+                    "INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'pending') RETURNING id",
+                    [studentId, batch_id]
+                );
+                enrollmentId = newEnrollment.rows[0].id;
+            }
+        } else {
+            // Batch ID မပါလျှင် နောက်ဆုံး Enrollment ကိုသာ ယူမည် (Old logic fallback)
+            const lastEnrollment = await pool.query(
+                "SELECT id FROM enrollments WHERE student_id = $1 ORDER BY joined_at DESC LIMIT 1",
+                [studentId]
+            );
+            if (lastEnrollment.rows.length === 0) return res.status(400).json({ message: "No enrollment found. Please select a course." });
+            enrollmentId = lastEnrollment.rows[0].id;
+        }
+        
+        // Payment သိမ်းဆည်းခြင်း
+        const newPayment = await pool.query(
+            `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, status, payment_date) 
+             VALUES ($1, $2, $3, $4, 'verified', CURRENT_TIMESTAMP) RETURNING *`, 
+            [enrollmentId, amount, payment_method, transaction_id]
+        );
         res.json(newPayment.rows[0]);
-    } catch (err) { res.status(500).send("Server Error"); }
+
+    } catch (err) { 
+        console.error(err);
+        res.status(500).send("Server Error"); 
+    }
 });
 
 // 9. Post Comment
