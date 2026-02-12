@@ -130,7 +130,7 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// ✅ (CRITICAL FIX) Make Payment Route - Added 'upload.single'
+// ✅ (UPDATED) Make Payment Route -> Status is now 'pending'
 router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
@@ -160,16 +160,15 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
                 enrollmentId = newEnrollment.rows[0].id;
             }
         } else {
-            // Fallback for old system
             const lastEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 ORDER BY joined_at DESC LIMIT 1", [studentId]);
             if (lastEnrollment.rows.length === 0) return res.status(400).json({ message: "No enrollment found." });
             enrollmentId = lastEnrollment.rows[0].id;
         }
         
-        // 4. Save Payment with Receipt Image
+        // 4. Save Payment with 'pending' status (✅ HERE IS THE FIX)
         const newPayment = await pool.query(
             `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, receipt_image, status, payment_date) 
-             VALUES ($1, $2, $3, $4, $5, 'verified', CURRENT_TIMESTAMP) RETURNING *`, 
+             VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP) RETURNING *`, 
             [enrollmentId, amount, payment_method, transaction_id, receiptUrl]
         );
         
