@@ -1,15 +1,12 @@
-// Payment upload fix updated
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const upload = require('../config/upload'); // multer config (Cloudinary)
+const upload = require('../config/upload'); // ✅ Cloudinary Config
 const { cleanImagePath } = require('../utils/helpers');
 
-// --- SYSTEM FIX ROUTES (Database ပြင်ဆင်ရန်) ---
-// ⚠️ Browser တွင် ဤလမ်းကြောင်းကို တစ်ကြိမ် Run ပေးပါ: https://myanedu-backend.onrender.com/students/fix-fees
+// --- SYSTEM FIX ROUTES ---
 router.get('/fix-fees', async (req, res) => {
     try {
-        // fees column မရှိသေးလျှင် ထည့်မည်
         await pool.query(`
             DO $$ 
             BEGIN 
@@ -18,18 +15,12 @@ router.get('/fix-fees', async (req, res) => {
                 END IF;
             END $$;
         `);
-        
-        // ဈေးနှုန်းများကို Default 30,000 ဟု ယာယီသတ်မှတ်မည် (Admin Panel တွင် ပြန်ပြင်နိုင်သည်)
         await pool.query("UPDATE batches SET fees = 30000 WHERE fees IS NULL OR fees = 0");
-        
-        res.send("✅ Success: 'fees' column added to batches table and updated!");
-    } catch (err) {
-        console.error(err);
-        res.status(500).send("Error updating DB: " + err.message);
-    }
+        res.send("✅ Success: 'fees' column added/updated!");
+    } catch (err) { res.status(500).send("Error: " + err.message); }
 });
 
-// --- NOTIFICATION ROUTES ---
+// --- NOTIFICATIONS ---
 router.get('/:id/notifications', async (req, res) => {
     try {
         const result = await pool.query("SELECT * FROM notifications WHERE student_id = $1 ORDER BY created_at DESC LIMIT 20", [req.params.id]);
@@ -44,9 +35,7 @@ router.put('/notifications/:id/read', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// --- STUDENT DATA ROUTES ---
-
-// 1. Get All Students
+// --- STUDENT ROUTES ---
 router.get('/', async (req, res) => {
     try {
         const allStudents = await pool.query('SELECT * FROM students ORDER BY id DESC');
@@ -54,7 +43,6 @@ router.get('/', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 2. Search Student
 router.get('/search', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -65,11 +53,9 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// ✅ (UPDATED) Get Active Batches with Fees for Payment Dropdown
-// ဤ Route သည် Frontend တွင် အတန်းရွေးရန်နှင့် ဈေးနှုန်းပြရန် အလုပ်လုပ်ပါမည်
+// Get Active Batches
 router.get('/active-batches', async (req, res) => {
     try {
-        // batches ဇယားနှင့် courses ဇယားကို တွဲပြီး ဈေးနှုန်း (fees) ပါ ယူမည်
         const query = `
             SELECT b.id, b.batch_name, b.fees, c.title as course_name 
             FROM batches b
@@ -79,14 +65,10 @@ router.get('/active-batches', async (req, res) => {
         `;
         const result = await pool.query(query);
         res.json(result.rows);
-    } catch (err) {
-        console.error("🔥 Active Batches Error:", err.message);
-        // Column မရှိသေးလျှင် Frontend ကို သတိပေးမည်
-        res.status(500).json({ error: err.message, hint: "Please run /students/fix-fees route once." });
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 3. Get Payments
+// Get Payments
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -103,13 +85,10 @@ router.get('/payments', async (req, res) => {
         const result = await pool.query(query, [phone]);
         const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
         res.json(fixedRows);
-    } catch (err) { 
-        console.error(err);
-        res.status(500).send('Server Error'); 
-    }
+    } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 4. Get Exams
+// Get Exams
 router.get('/exams', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -120,18 +99,14 @@ router.get('/exams', async (req, res) => {
             JOIN students s ON e.student_id = s.id 
             JOIN batches b ON e.batch_id = b.id 
             JOIN courses c ON b.course_id = c.id 
-            WHERE s.phone_primary = $1 
-            ORDER BY er.result_date DESC
+            WHERE s.phone_primary = $1 ORDER BY er.result_date DESC
         `;
         const result = await pool.query(query, [phone]);
         res.json(result.rows);
-    } catch (err) { 
-        console.error(err);
-        res.status(500).send('Server Error'); 
-    }
+    } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 5. Update Student Profile
+// Update Profile
 router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -155,61 +130,29 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 6. Admin Update Student Info
-router.put('/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, phone_primary, phone_secondary, address } = req.body;
-        
-        await pool.query(
-            "UPDATE students SET name = $1, phone_primary = $2, phone_secondary = $3, address = $4 WHERE id = $5",
-            [name, phone_primary, phone_secondary, address, id]
-        );
-        res.json({ message: "Updated successfully" });
-    } catch (err) { 
-        console.error(err);
-        res.status(500).send("Server Error"); 
-    }
-});
-
-// 7. Enroll
-router.post('/enroll', async (req, res) => {
-    try {
-        const { phone, batch_name } = req.body;
-        const studentRes = await pool.query("SELECT id FROM students WHERE phone_primary = $1", [phone]);
-        if (studentRes.rows.length === 0) return res.status(404).json({ message: "Student not found" });
-        const batchRes = await pool.query("SELECT id FROM batches WHERE batch_name = $1", [batch_name]);
-        if (batchRes.rows.length === 0) return res.status(404).json({ message: "Batch not found" });
-        
-        const newEnrollment = await pool.query("INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'active') RETURNING *", [studentRes.rows[0].id, batchRes.rows[0].id]);
-        res.json(newEnrollment.rows[0]);
-    } catch (err) { res.status(500).send("Server Error"); }
-});
-
-// 8. Make Payment (Updated Logic)
-router.post('/payments', async (req, res) => {
+// ✅ (CRITICAL FIX) Make Payment Route - Added 'upload.single'
+router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
         
-        // ကျောင်းသား ID ရှာမည်
+        // 1. Check for Receipt Image
+        const receiptUrl = req.file ? req.file.path : null;
+        if (!receiptUrl) {
+            return res.status(400).json({ message: "Receipt image is required" });
+        }
+
+        // 2. Find Student
         const studentRes = await pool.query("SELECT id FROM students WHERE phone_primary = $1", [phone]);
         if (studentRes.rows.length === 0) return res.status(404).json({ message: "Student not found" });
         const studentId = studentRes.rows[0].id;
 
-        // Enrollment ရှိမရှိ စစ်ဆေးခြင်း (batch_id ပါပါက ထို batch အတွက် enrollment ရှာမည်)
+        // 3. Handle Enrollment
         let enrollmentId;
-        
         if (batch_id) {
-            // Batch ID ပါလာလျှင် Enrollment အသစ်လုပ်ရန် လိုမလို စစ်ဆေးမည်
-            const existingEnrollment = await pool.query(
-                "SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2",
-                [studentId, batch_id]
-            );
-
+            const existingEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2", [studentId, batch_id]);
             if (existingEnrollment.rows.length > 0) {
                 enrollmentId = existingEnrollment.rows[0].id;
             } else {
-                // Enrollment မရှိသေးပါက အသစ်ဖန်တီးမည် (Auto Enroll)
                 const newEnrollment = await pool.query(
                     "INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'pending') RETURNING id",
                     [studentId, batch_id]
@@ -217,69 +160,56 @@ router.post('/payments', async (req, res) => {
                 enrollmentId = newEnrollment.rows[0].id;
             }
         } else {
-            // Batch ID မပါလျှင် နောက်ဆုံး Enrollment ကိုသာ ယူမည် (Old logic fallback)
-            const lastEnrollment = await pool.query(
-                "SELECT id FROM enrollments WHERE student_id = $1 ORDER BY joined_at DESC LIMIT 1",
-                [studentId]
-            );
-            if (lastEnrollment.rows.length === 0) return res.status(400).json({ message: "No enrollment found. Please select a course." });
+            // Fallback for old system
+            const lastEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 ORDER BY joined_at DESC LIMIT 1", [studentId]);
+            if (lastEnrollment.rows.length === 0) return res.status(400).json({ message: "No enrollment found." });
             enrollmentId = lastEnrollment.rows[0].id;
         }
         
-        // Payment သိမ်းဆည်းခြင်း
+        // 4. Save Payment with Receipt Image
         const newPayment = await pool.query(
-            `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, status, payment_date) 
-             VALUES ($1, $2, $3, $4, 'verified', CURRENT_TIMESTAMP) RETURNING *`, 
-            [enrollmentId, amount, payment_method, transaction_id]
+            `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, receipt_image, status, payment_date) 
+             VALUES ($1, $2, $3, $4, $5, 'verified', CURRENT_TIMESTAMP) RETURNING *`, 
+            [enrollmentId, amount, payment_method, transaction_id, receiptUrl]
         );
+        
         res.json(newPayment.rows[0]);
 
     } catch (err) { 
-        console.error(err);
-        res.status(500).send("Server Error"); 
+        console.error("Payment Error:", err); 
+        res.status(500).json({ message: "Server Error: " + err.message }); 
     }
 });
 
-// 9. Post Comment
+// Other routes
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, user_name, message } = req.body;
-        await pool.query(
-            "INSERT INTO comments (lesson_id, user_name, user_role, message) VALUES ($1, $2, 'student', $3)",
-            [lesson_id, user_name, message]
-        );
+        await pool.query("INSERT INTO comments (lesson_id, user_name, user_role, message) VALUES ($1, $2, 'student', $3)", [lesson_id, user_name, message]);
         res.json({ message: "Comment added" });
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 10. Delete Student
 router.delete('/:id', async (req, res) => {
     const client = await pool.connect();
     try {
         const { id } = req.params;
         await client.query('BEGIN');
-
         await client.query("DELETE FROM notifications WHERE student_id = $1", [id]);
         await client.query("DELETE FROM exam_results WHERE enrollment_id IN (SELECT id FROM enrollments WHERE student_id = $1)", [id]);
         await client.query("DELETE FROM payments WHERE enrollment_id IN (SELECT id FROM enrollments WHERE student_id = $1)", [id]);
         await client.query("DELETE FROM enrollments WHERE student_id = $1", [id]);
         const result = await client.query("DELETE FROM students WHERE id = $1", [id]);
-
         if (result.rowCount === 0) {
              await client.query('ROLLBACK');
              return res.status(404).json({ message: "Student not found" });
         }
-
         await client.query('COMMIT');
         res.json({ message: "Deleted Successfully!" });
-
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("Delete Error:", err.message);
         res.status(500).send("Server Error: " + err.message);
-    } finally {
-        client.release();
-    }
+    } finally { client.release(); }
 });
 
 module.exports = router;
