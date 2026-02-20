@@ -36,6 +36,8 @@ router.put('/notifications/:id/read', async (req, res) => {
 });
 
 // --- STUDENT ROUTES ---
+
+// 1. Get All Students
 router.get('/', async (req, res) => {
     try {
         const allStudents = await pool.query('SELECT * FROM students ORDER BY id DESC');
@@ -43,6 +45,7 @@ router.get('/', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
+// 2. Search Student
 router.get('/search', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -53,7 +56,7 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// Get Active Batches
+// 3. Get Active Batches
 router.get('/active-batches', async (req, res) => {
     try {
         const query = `
@@ -68,7 +71,7 @@ router.get('/active-batches', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ✅ (FIXED) Get Payments - cleanImagePath ကို ဖယ်ရှားပြီး Cloudinary URL တိုက်ရိုက်ပို့မည်
+// 4. Get Payments (Cloudinary URL ကို တိုက်ရိုက်ပို့ရန် cleanImagePath ဖယ်ထားသည်)
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -83,13 +86,11 @@ router.get('/payments', async (req, res) => {
           WHERE s.phone_primary = $1 ORDER BY p.payment_date DESC
         `;
         const result = await pool.query(query, [phone]);
-        
-        // ဓာတ်ပုံလင့်ခ် ပျက်မသွားစေရန် တိုက်ရိုက်ပို့ပါမည်
         res.json(result.rows);
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// Get Exams
+// 5. Get Exams
 router.get('/exams', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -107,31 +108,28 @@ router.get('/exams', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// Update Profile
-router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
+// ✅ 6. (FIXED POSITION) Get Lessons for a Specific Batch (အပေါ်သို့ ရွှေ့လိုက်ပါပြီ)
+router.get('/lessons', async (req, res) => {
     try {
-        const { id } = req.params;
-        const { name, address, old_password, new_password } = req.body;
-        const currentStudent = await pool.query("SELECT * FROM students WHERE id = $1", [id]);
-        if (currentStudent.rows.length === 0) return res.status(404).json({ message: "Not Found" });
+        const { batch_id } = req.query;
         
-        const oldData = currentStudent.rows[0];
-        let finalPassword = oldData.password;
-        if (new_password && new_password.trim() !== "") {
-            if (!old_password) return res.status(400).json({ message: "Need Old Password" });
-            if (old_password !== oldData.password) return res.status(401).json({ message: "Wrong Old Password" });
-            finalPassword = new_password;
+        if (!batch_id) {
+            return res.status(400).json({ message: "Batch ID is required" });
         }
 
-        let newImage = oldData.profile_image;
-        if (req.file) newImage = req.file.path; 
-
-        await pool.query("UPDATE students SET name=$1, password=$2, address=$3, profile_image=$4 WHERE id=$5", [name || oldData.name, finalPassword, address || oldData.address, newImage, id]);
-        res.json({ message: "Updated!" });
-    } catch (err) { res.status(500).send("Server Error"); }
+        const result = await pool.query(
+            "SELECT * FROM lessons WHERE batch_id = $1 ORDER BY created_at ASC",
+            [batch_id]
+        );
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Fetch Lessons Error:", err);
+        res.status(500).send("Server Error");
+    }
 });
 
-// Make Payment Route (Pending Status)
+// 7. Make Payment Route (Pending Status)
 router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
@@ -177,7 +175,7 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     }
 });
 
-// Other routes
+// 8. Comments Route
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, user_name, message } = req.body;
@@ -186,6 +184,31 @@ router.post('/comments', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
+// 9. Update Profile
+router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, address, old_password, new_password } = req.body;
+        const currentStudent = await pool.query("SELECT * FROM students WHERE id = $1", [id]);
+        if (currentStudent.rows.length === 0) return res.status(404).json({ message: "Not Found" });
+        
+        const oldData = currentStudent.rows[0];
+        let finalPassword = oldData.password;
+        if (new_password && new_password.trim() !== "") {
+            if (!old_password) return res.status(400).json({ message: "Need Old Password" });
+            if (old_password !== oldData.password) return res.status(401).json({ message: "Wrong Old Password" });
+            finalPassword = new_password;
+        }
+
+        let newImage = oldData.profile_image;
+        if (req.file) newImage = req.file.path; 
+
+        await pool.query("UPDATE students SET name=$1, password=$2, address=$3, profile_image=$4 WHERE id=$5", [name || oldData.name, finalPassword, address || oldData.address, newImage, id]);
+        res.json({ message: "Updated!" });
+    } catch (err) { res.status(500).send("Server Error"); }
+});
+
+// 10. Delete Student (ဒါက အမြဲတမ်း အောက်ဆုံးမှာ ရှိရပါမယ်)
 router.delete('/:id', async (req, res) => {
     const client = await pool.connect();
     try {
