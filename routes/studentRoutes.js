@@ -68,7 +68,7 @@ router.get('/active-batches', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get Payments
+// ✅ (FIXED) Get Payments - cleanImagePath ကို ဖယ်ရှားပြီး Cloudinary URL တိုက်ရိုက်ပို့မည်
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -83,8 +83,9 @@ router.get('/payments', async (req, res) => {
           WHERE s.phone_primary = $1 ORDER BY p.payment_date DESC
         `;
         const result = await pool.query(query, [phone]);
-        const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
-        res.json(fixedRows);
+        
+        // ဓာတ်ပုံလင့်ခ် ပျက်မသွားစေရန် တိုက်ရိုက်ပို့ပါမည်
+        res.json(result.rows);
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
@@ -130,23 +131,20 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// ✅ (UPDATED) Make Payment Route -> Status is now 'pending'
+// Make Payment Route (Pending Status)
 router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
         
-        // 1. Check for Receipt Image
         const receiptUrl = req.file ? req.file.path : null;
         if (!receiptUrl) {
             return res.status(400).json({ message: "Receipt image is required" });
         }
 
-        // 2. Find Student
         const studentRes = await pool.query("SELECT id FROM students WHERE phone_primary = $1", [phone]);
         if (studentRes.rows.length === 0) return res.status(404).json({ message: "Student not found" });
         const studentId = studentRes.rows[0].id;
 
-        // 3. Handle Enrollment
         let enrollmentId;
         if (batch_id) {
             const existingEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2", [studentId, batch_id]);
@@ -165,7 +163,6 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
             enrollmentId = lastEnrollment.rows[0].id;
         }
         
-        // 4. Save Payment with 'pending' status (✅ HERE IS THE FIX)
         const newPayment = await pool.query(
             `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, receipt_image, status, payment_date) 
              VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP) RETURNING *`, 

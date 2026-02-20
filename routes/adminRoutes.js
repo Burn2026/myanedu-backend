@@ -1,14 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db'); 
-const upload = require('../config/upload'); // Cloudinary/Multer config
+const upload = require('../config/upload'); // Cloudinary Config
 const { cleanImagePath } = require('../utils/helpers');
 
 // --- SYSTEM FIX ROUTE (Batch Status ပြင်ဆင်ရန်) ---
-// ⚠️ Browser တွင် ဤလမ်းကြောင်းကို တစ်ကြိမ် Run ပေးပါ: /admin/fix-batch-status
 router.get('/fix-batch-status', async (req, res) => {
     try {
-        // Status column မရှိသေးရင် ထည့်မယ်
         await pool.query(`
             DO $$ 
             BEGIN 
@@ -18,9 +16,7 @@ router.get('/fix-batch-status', async (req, res) => {
             END $$;
         `);
         
-        // ရှိပြီးသား အတန်းအားလုံးကို 'active' ဟု ပြောင်းမည် (ဒါမှ ကျောင်းသားမြင်ရမည်)
         await pool.query("UPDATE batches SET status = 'active' WHERE status IS NULL OR status = ''");
-        
         res.send("✅ Success: All batches are now ACTIVE and visible to students!");
     } catch (err) {
         console.error(err);
@@ -70,7 +66,6 @@ const rejectPaymentHandler = async (req, res) => {
         const { id } = req.params;
         await client.query('BEGIN');
 
-        // 1. payments table status ကို 'rejected' သို့ ပြောင်းမည်
         const paymentUpdate = await client.query(
             "UPDATE payments SET status = 'rejected' WHERE id = $1 RETURNING *", 
             [id]
@@ -83,7 +78,6 @@ const rejectPaymentHandler = async (req, res) => {
 
         const enrollmentId = paymentUpdate.rows[0].enrollment_id;
         
-        // 2. enrollments table status ကိုပါ 'rejected' သို့ တစ်ပါတည်း ပြောင်းမည်
         if (enrollmentId) {
             await client.query(
                 "UPDATE enrollments SET status = 'rejected', expire_date = (NOW() - INTERVAL '1 day') WHERE id = $1", 
@@ -103,7 +97,6 @@ const rejectPaymentHandler = async (req, res) => {
 // --- 3. COURSE & BATCH ROUTES ---
 router.get('/batches', async (req, res) => {
     try {
-        // Admin က အတန်းအားလုံး (Active/Inactive) ကြည့်နိုင်အောင်
         const result = await pool.query(`
             SELECT b.*, c.title as course_name 
             FROM batches b JOIN courses c ON b.course_id = c.id 
@@ -121,11 +114,9 @@ router.post('/courses', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
-// ✅ (UPDATED) Create Batch with Status and Fees
 router.post('/batches', async (req, res) => {
     try {
         const { id, course_id, batch_name, fees } = req.body;
-        // Status ကို Default 'active' ဟု သတ်မှတ်မည်
         const result = await pool.query(
             "INSERT INTO batches (id, course_id, batch_name, fees, status) VALUES ($1, $2, $3, $4, 'active') RETURNING *", 
             [id, course_id, batch_name, fees]
@@ -134,7 +125,6 @@ router.post('/batches', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
-// ✅ (NEW) Update Batch (For Admin to change Fees/Status)
 router.put('/batches/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -164,7 +154,7 @@ router.get('/stats', async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 });
 
-// --- 5. PAYMENT ROUTES ---
+// ✅ (FIXED) PAYMENT ROUTES - cleanImagePath ကို ဖယ်ရှားပြီး Cloudinary URL တိုက်ရိုက်ပို့မည်
 router.get('/payments', async (req, res) => {
     try {
         const query = `
@@ -177,8 +167,9 @@ router.get('/payments', async (req, res) => {
           ORDER BY CASE WHEN p.status = 'pending' THEN 1 ELSE 2 END, p.payment_date DESC
         `;
         const result = await pool.query(query);
-        const fixedRows = result.rows.map(row => ({ ...row, receipt_image: cleanImagePath(row.receipt_image) }));
-        res.json(fixedRows);
+        
+        // ဓာတ်ပုံလင့်ခ် ပျက်မသွားစေရန် တိုက်ရိုက်ပို့ပါမည်
+        res.json(result.rows);
     } catch (err) { res.status(500).send(err.message); }
 });
 
