@@ -95,15 +95,22 @@ const rejectPaymentHandler = async (req, res) => {
 };
 
 // --- 3. COURSE & BATCH ROUTES ---
+
+// ✅ (UPDATED) get batches route with lesson_count
 router.get('/batches', async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT b.*, c.title as course_name 
-            FROM batches b JOIN courses c ON b.course_id = c.id 
+            SELECT b.*, c.title as course_name,
+                   (SELECT COUNT(*) FROM lessons l WHERE l.batch_id::text = b.id::text) as lesson_count
+            FROM batches b 
+            JOIN courses c ON b.course_id = c.id 
             ORDER BY b.created_at DESC
         `);
         res.json(result.rows);
-    } catch (err) { res.status(500).send("Error"); }
+    } catch (err) { 
+        console.error("Fetch Batches Error:", err);
+        res.status(500).send("Error fetching batches"); 
+    }
 });
 
 router.post('/courses', async (req, res) => {
@@ -154,7 +161,7 @@ router.get('/stats', async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 });
 
-// ✅ (FIXED) PAYMENT ROUTES - cleanImagePath ကို ဖယ်ရှားပြီး Cloudinary URL တိုက်ရိုက်ပို့မည်
+// --- PAYMENT ROUTES ---
 router.get('/payments', async (req, res) => {
     try {
         const query = `
@@ -167,8 +174,6 @@ router.get('/payments', async (req, res) => {
           ORDER BY CASE WHEN p.status = 'pending' THEN 1 ELSE 2 END, p.payment_date DESC
         `;
         const result = await pool.query(query);
-        
-        // ဓာတ်ပုံလင့်ခ် ပျက်မသွားစေရန် တိုက်ရိုက်ပို့ပါမည်
         res.json(result.rows);
     } catch (err) { res.status(500).send(err.message); }
 });
@@ -188,6 +193,18 @@ router.post('/lessons', upload.single('video_file'), async (req, res) => {
         const result = await pool.query("INSERT INTO lessons (batch_id, title, video_url, description) VALUES ($1, $2, $3, $4) RETURNING *", [batch_id, title, videoUrl, description]);
         res.json(result.rows[0]);
     } catch (err) { res.status(500).json("Error"); }
+});
+
+// ✅ (NEW) လိုအပ်နေသော DELETE Route for lessons
+router.delete('/lessons/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query("DELETE FROM lessons WHERE id = $1", [id]);
+        res.json({ message: "Lesson deleted successfully" });
+    } catch (err) {
+        console.error("Delete Lesson Error:", err);
+        res.status(500).send("Server Error");
+    }
 });
 
 router.get('/discussions', async (req, res) => {
