@@ -2,21 +2,25 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
 
+// ✅ .env ဖိုင်ထဲက Key များကို လှမ်းခေါ်သုံးခြင်း (process.env ကို အသုံးပြုထားသည်)
 cloudinary.config({
-  cloud_name: 'domur49qq', // Cloudinary Dashboard မှ နာမည်ထည့်ပါ
-  api_key: '865224348384822',       // Cloudinary Dashboard မှ Key ထည့်ပါ
-  api_secret: 'OOzhK2jx8iyGLff7Bu7CBqNEgig'  // Cloudinary Dashboard မှ Secret ထည့်ပါ
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'myanedu_uploads', // Cloudinary ပေါ်တွင် သိမ်းမည့် Folder အမည်
-    allowed_formats: ['jpg', 'png', 'jpeg', 'mp4', 'mkv'],
-    resource_type: 'auto' // Video ရော Image ပါ လက်ခံရန်
+    folder: 'myanedu_lessons', // Cloudinary ထဲက Folder နာမည်
+    resource_type: 'auto',     // Video နှင့် Image အားလုံးကို လက်ခံရန်
+    allowed_formats: ['mp4', 'mkv', 'mov', 'avi', 'jpg', 'jpeg', 'png'], // ✅ .mov ကိုပါ ခွင့်ပြုပေးထားသည်
   },
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 100 * 1024 * 1024 } // ✅ 100MB Limit သတ်မှတ်ထားသည်
+});
 
 module.exports = upload;
