@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const upload = require('../config/upload'); // ✅ Cloudinary Config
+const upload = require('../config/upload'); 
 const { cleanImagePath } = require('../utils/helpers');
 
 // --- SYSTEM FIX ROUTES ---
@@ -36,8 +36,6 @@ router.put('/notifications/:id/read', async (req, res) => {
 });
 
 // --- STUDENT ROUTES ---
-
-// 1. Get All Students
 router.get('/', async (req, res) => {
     try {
         const allStudents = await pool.query('SELECT * FROM students ORDER BY id DESC');
@@ -45,7 +43,6 @@ router.get('/', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 2. Search Student
 router.get('/search', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -56,7 +53,6 @@ router.get('/search', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 3. Get Active Batches
 router.get('/active-batches', async (req, res) => {
     try {
         const query = `
@@ -71,7 +67,6 @@ router.get('/active-batches', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. Get Payments 
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -90,7 +85,6 @@ router.get('/payments', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 5. Get Exams
 router.get('/exams', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -108,7 +102,6 @@ router.get('/exams', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 6. Get Lessons for a Specific Batch 
 router.get('/lessons', async (req, res) => {
     try {
         const { batch_id } = req.query;
@@ -125,7 +118,6 @@ router.get('/lessons', async (req, res) => {
     }
 });
 
-// ✅ 7. (UPDATED) Make Payment Route with Validation (Double Payment Prevention)
 router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
@@ -141,9 +133,7 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
 
         let enrollmentId;
 
-        // ✅ DOUBLE PAYMENT PREVENTION LOGIC
         if (batch_id) {
-            // ၁။ အရင်ဆုံး ဒီအတန်းကို ဝင်ပြီးသားလား စစ်ဆေးမည်
             const existingEnrollment = await pool.query(
                 "SELECT id, status, expire_date FROM enrollments WHERE student_id = $1 AND batch_id = $2", 
                 [studentId, batch_id]
@@ -152,31 +142,22 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
             if (existingEnrollment.rows.length > 0) {
                 const enrollment = existingEnrollment.rows[0];
 
-                // ✅ Validation 1: Active ဖြစ်နေပြီး သက်တမ်းမကုန်သေးလျှင် (အတန်းတက်နေဆဲ)
                 if (enrollment.status === 'active' && new Date(enrollment.expire_date) > new Date()) {
                     return res.status(400).json({ 
                         message: "သင်သည် ဤအတန်းအား ဝင်ရောက်ခွင့်ရရှိပြီး ဖြစ်ပါသည်။ သက်တမ်းမကုန်သေးမီ ထပ်မံပေးချေရန် မလိုအပ်ပါ။" 
                     });
                 }
                 
-                // ✅ Validation 2: Pending ဖြစ်နေလျှင် (Admin အတည်ပြုဖို့ စောင့်နေဆဲ)
                 if (enrollment.status === 'pending') {
                     return res.status(400).json({ 
                         message: "သင်၏ ယခင်ငွေပေးချေမှုအား စစ်ဆေးနေဆဲဖြစ်ပါသည်။ Admin မှ အတည်ပြုသည်အထိ ခဏစောင့်ဆိုင်းပေးပါ။" 
                     });
                 }
 
-                // သက်တမ်းကုန်သွားသည် (expired) သို့မဟုတ် ပယ်ချခံထားရသည် (rejected) ဆိုလျှင် သာ ထပ်မံပေးချေခွင့်ပြုမည်
                 enrollmentId = enrollment.id;
-                
-                // Status ကို ပြန်လည်စစ်ဆေးရန် pending သို့ ပြောင်းမည်
-                await pool.query(
-                    "UPDATE enrollments SET status = 'pending' WHERE id = $1", 
-                    [enrollmentId]
-                );
+                await pool.query("UPDATE enrollments SET status = 'pending' WHERE id = $1", [enrollmentId]);
 
             } else {
-                // Enrollment အသစ်ဖန်တီးမည်
                 const newEnrollment = await pool.query(
                     "INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'pending') RETURNING id",
                     [studentId, batch_id]
@@ -187,13 +168,11 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
             return res.status(400).json({ message: "အတန်း (Batch ID) ရွေးချယ်ရန် လိုအပ်ပါသည်။" });
         }
         
-        // ၂။ Payment အသစ် ဖန်တီးမည်
         const newPayment = await pool.query(
             `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, receipt_image, status, payment_date) 
              VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP) RETURNING *`, 
             [enrollmentId, amount, payment_method, transaction_id, receiptUrl]
         );
-        
         res.json(newPayment.rows[0]);
 
     } catch (err) { 
@@ -202,7 +181,29 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     }
 });
 
-// 8. Comments Route
+// ✅ 8. (UPDATED) Comments Route with Private Filtering
+// ကျောင်းသားက စာဆွဲထုတ်တဲ့အခါ ကိုယ်မေးထားတာနဲ့ Admin ဖြေထားတာပဲ မြင်ရမည်
+router.get('/comments', async (req, res) => {
+    try {
+        const { lesson_id, user_name } = req.query;
+        if (!lesson_id) return res.status(400).json({ message: "lesson_id is required" });
+
+        // Logic: Show messages WHERE lesson_id is correct AND (User is ME OR User is Admin)
+        const result = await pool.query(`
+            SELECT * FROM comments 
+            WHERE lesson_id = $1 
+            AND (user_name = $2 OR user_role = 'admin')
+            ORDER BY created_at ASC
+        `, [lesson_id, user_name]);
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Fetch Student Comments Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+});
+
+// Post Comment
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, user_name, message } = req.body;
@@ -211,7 +212,6 @@ router.post('/comments', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 9. Update Profile
 router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -235,7 +235,6 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 10. Delete Student
 router.delete('/:id', async (req, res) => {
     const client = await pool.connect();
     try {
