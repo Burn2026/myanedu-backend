@@ -204,21 +204,32 @@ router.delete('/lessons/:id', async (req, res) => {
     }
 });
 
+// ✅ (UPDATED) နောက်ဆုံးပို့ထားသော Message အားပါ ဆွဲထုတ်မည်
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
-            SELECT l.id, l.title as lesson_title, b.batch_name, COUNT(co.id) as total_comments
+            SELECT 
+                l.id, 
+                l.title as lesson_title, 
+                b.batch_name, 
+                COUNT(co.id) as total_comments,
+                (SELECT message FROM comments WHERE lesson_id = l.id ORDER BY created_at DESC LIMIT 1) as last_message,
+                (SELECT created_at FROM comments WHERE lesson_id = l.id ORDER BY created_at DESC LIMIT 1) as last_message_time
             FROM lessons l 
-            LEFT JOIN comments co ON l.id = co.lesson_id
+            JOIN comments co ON l.id = co.lesson_id
             LEFT JOIN batches b ON l.batch_id = b.id::text 
             GROUP BY l.id, l.title, b.batch_name
+            ORDER BY last_message_time DESC
         `;
         const result = await pool.query(query);
         res.json(result.rows);
-    } catch (err) { res.status(500).send("Error"); }
+    } catch (err) { 
+        console.error("Fetch Discussions Error:", err);
+        res.status(500).send("Error fetching discussions"); 
+    }
 });
 
-// ✅ (NEW) လိုအပ်နေသော COMMENTS API (GET) - စာများကို ဆွဲထုတ်ရန်
+// COMMENTS API (GET) - စာများကို ဆွဲထုတ်ရန်
 router.get('/comments', async (req, res) => {
     try {
         const { lesson_id } = req.query;
@@ -237,11 +248,11 @@ router.get('/comments', async (req, res) => {
     }
 });
 
-// ✅ (NEW) လိုအပ်နေသော COMMENTS API (POST) - Admin မှ စာပြန်ပို့ရန်
+// COMMENTS API (POST) - Admin မှ စာပြန်ပို့ရန်
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, message, comment, user_role } = req.body;
-        const finalMessage = message || comment; // Frontend မှ နာမည်ကွဲလွဲပါက အဆင်ပြေစေရန်
+        const finalMessage = message || comment; 
         const role = user_role || 'admin';
         const userName = 'Admin';
 
@@ -249,7 +260,6 @@ router.post('/comments', async (req, res) => {
             return res.status(400).json({ message: "lesson_id and message are required" });
         }
 
-        // ဤနေရာတွင် Database column နာမည်သည် 'message' သို့မဟုတ် 'comment' ဖြစ်နိုင်ပါသည်။ (များသောအားဖြင့် 'message' သုံးပါသည်)
         const result = await pool.query(`
             INSERT INTO comments (lesson_id, user_role, user_name, message, created_at) 
             VALUES ($1, $2, $3, $4, NOW()) RETURNING *
@@ -259,7 +269,6 @@ router.post('/comments', async (req, res) => {
     } catch (err) {
         console.error("Post Comment Error:", err);
         
-        // တကယ်လို့ Column နာမည်က 'message' အစား 'comment' ဖြစ်နေလျှင် အလိုအလျောက် Error ကို ဖြေရှင်းပေးမည့် Fallback
         if (err.code === '42703' && err.message.includes('message')) {
             try {
                 const retryResult = await pool.query(`
