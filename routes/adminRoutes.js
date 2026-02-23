@@ -95,8 +95,6 @@ const rejectPaymentHandler = async (req, res) => {
 };
 
 // --- 3. COURSE & BATCH ROUTES ---
-
-// ✅ (UPDATED) get batches route with lesson_count
 router.get('/batches', async (req, res) => {
     try {
         const result = await pool.query(`
@@ -161,7 +159,7 @@ router.get('/stats', async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 });
 
-// --- PAYMENT ROUTES ---
+// --- 5. PAYMENT ROUTES ---
 router.get('/payments', async (req, res) => {
     try {
         const query = `
@@ -185,7 +183,7 @@ router.put('/payments/:id', async (req, res) => {
     res.status(400).json("Invalid Status");
 });
 
-// --- 6. LESSONS & DISCUSSIONS ---
+// --- 6. LESSONS, DISCUSSIONS & COMMENTS ---
 router.post('/lessons', upload.single('video_file'), async (req, res) => {
     try {
         const { batch_id, title, description } = req.body;
@@ -195,7 +193,6 @@ router.post('/lessons', upload.single('video_file'), async (req, res) => {
     } catch (err) { res.status(500).json("Error"); }
 });
 
-// ✅ (NEW) လိုအပ်နေသော DELETE Route for lessons
 router.delete('/lessons/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -211,12 +208,72 @@ router.get('/discussions', async (req, res) => {
     try {
         const query = `
             SELECT l.id, l.title as lesson_title, b.batch_name, COUNT(co.id) as total_comments
-            FROM lessons l JOIN comments co ON l.id = co.lesson_id
-            LEFT JOIN batches b ON l.batch_id = b.id::text GROUP BY l.id, l.title, b.batch_name
+            FROM lessons l 
+            LEFT JOIN comments co ON l.id = co.lesson_id
+            LEFT JOIN batches b ON l.batch_id = b.id::text 
+            GROUP BY l.id, l.title, b.batch_name
         `;
         const result = await pool.query(query);
         res.json(result.rows);
     } catch (err) { res.status(500).send("Error"); }
+});
+
+// ✅ (NEW) လိုအပ်နေသော COMMENTS API (GET) - စာများကို ဆွဲထုတ်ရန်
+router.get('/comments', async (req, res) => {
+    try {
+        const { lesson_id } = req.query;
+        if (!lesson_id) return res.status(400).json({ message: "lesson_id is required" });
+
+        const result = await pool.query(`
+            SELECT * FROM comments 
+            WHERE lesson_id = $1 
+            ORDER BY created_at ASC
+        `, [lesson_id]);
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Fetch Comments Error:", err);
+        res.status(500).json({ message: "Server Error fetching comments" });
+    }
+});
+
+// ✅ (NEW) လိုအပ်နေသော COMMENTS API (POST) - Admin မှ စာပြန်ပို့ရန်
+router.post('/comments', async (req, res) => {
+    try {
+        const { lesson_id, message, comment, user_role } = req.body;
+        const finalMessage = message || comment; // Frontend မှ နာမည်ကွဲလွဲပါက အဆင်ပြေစေရန်
+        const role = user_role || 'admin';
+        const userName = 'Admin';
+
+        if (!lesson_id || !finalMessage) {
+            return res.status(400).json({ message: "lesson_id and message are required" });
+        }
+
+        // ဤနေရာတွင် Database column နာမည်သည် 'message' သို့မဟုတ် 'comment' ဖြစ်နိုင်ပါသည်။ (များသောအားဖြင့် 'message' သုံးပါသည်)
+        const result = await pool.query(`
+            INSERT INTO comments (lesson_id, user_role, user_name, message, created_at) 
+            VALUES ($1, $2, $3, $4, NOW()) RETURNING *
+        `, [lesson_id, role, userName, finalMessage]);
+
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        console.error("Post Comment Error:", err);
+        
+        // တကယ်လို့ Column နာမည်က 'message' အစား 'comment' ဖြစ်နေလျှင် အလိုအလျောက် Error ကို ဖြေရှင်းပေးမည့် Fallback
+        if (err.code === '42703' && err.message.includes('message')) {
+            try {
+                const retryResult = await pool.query(`
+                    INSERT INTO comments (lesson_id, user_role, user_name, comment, created_at) 
+                    VALUES ($1, $2, $3, $4, NOW()) RETURNING *
+                `, [lesson_id, role, userName, finalMessage]);
+                return res.status(201).json(retryResult.rows[0]);
+            } catch (retryErr) {
+                console.error("Retry Error:", retryErr);
+                return res.status(500).json({ message: "Database Error" });
+            }
+        }
+        res.status(500).json({ message: "Server Error posting comment" });
+    }
 });
 
 // --- 7. EXAMS ---
