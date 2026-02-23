@@ -71,7 +71,7 @@ router.get('/active-batches', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. Get Payments (Cloudinary URL ကို တိုက်ရိုက်ပို့ရန် cleanImagePath ဖယ်ထားသည်)
+// 4. Get Payments 
 router.get('/payments', async (req, res) => {
     try {
         const { phone } = req.query;
@@ -108,20 +108,16 @@ router.get('/exams', async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// ✅ 6. (FIXED POSITION) Get Lessons for a Specific Batch (အပေါ်သို့ ရွှေ့လိုက်ပါပြီ)
+// 6. Get Lessons for a Specific Batch 
 router.get('/lessons', async (req, res) => {
     try {
         const { batch_id } = req.query;
-        
-        if (!batch_id) {
-            return res.status(400).json({ message: "Batch ID is required" });
-        }
+        if (!batch_id) return res.status(400).json({ message: "Batch ID is required" });
 
         const result = await pool.query(
             "SELECT * FROM lessons WHERE batch_id = $1 ORDER BY created_at ASC",
             [batch_id]
         );
-        
         res.json(result.rows);
     } catch (err) {
         console.error("Fetch Lessons Error:", err);
@@ -129,26 +125,58 @@ router.get('/lessons', async (req, res) => {
     }
 });
 
-// 7. Make Payment Route (Pending Status)
+// ✅ 7. (UPDATED) Make Payment Route with Validation (Double Payment Prevention)
 router.post('/payments', upload.single('receipt_image'), async (req, res) => {
     try {
         const { phone, amount, payment_method, transaction_id, batch_id } = req.body; 
         
         const receiptUrl = req.file ? req.file.path : null;
         if (!receiptUrl) {
-            return res.status(400).json({ message: "Receipt image is required" });
+            return res.status(400).json({ message: "ငွေလွှဲပြေစာပုံ (Receipt) လိုအပ်ပါသည်။" });
         }
 
         const studentRes = await pool.query("SELECT id FROM students WHERE phone_primary = $1", [phone]);
-        if (studentRes.rows.length === 0) return res.status(404).json({ message: "Student not found" });
+        if (studentRes.rows.length === 0) return res.status(404).json({ message: "ကျောင်းသားအကောင့် ရှာမတွေ့ပါ။" });
         const studentId = studentRes.rows[0].id;
 
         let enrollmentId;
+
+        // ✅ DOUBLE PAYMENT PREVENTION LOGIC
         if (batch_id) {
-            const existingEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2", [studentId, batch_id]);
+            // ၁။ အရင်ဆုံး ဒီအတန်းကို ဝင်ပြီးသားလား စစ်ဆေးမည်
+            const existingEnrollment = await pool.query(
+                "SELECT id, status, expire_date FROM enrollments WHERE student_id = $1 AND batch_id = $2", 
+                [studentId, batch_id]
+            );
+
             if (existingEnrollment.rows.length > 0) {
-                enrollmentId = existingEnrollment.rows[0].id;
+                const enrollment = existingEnrollment.rows[0];
+
+                // ✅ Validation 1: Active ဖြစ်နေပြီး သက်တမ်းမကုန်သေးလျှင် (အတန်းတက်နေဆဲ)
+                if (enrollment.status === 'active' && new Date(enrollment.expire_date) > new Date()) {
+                    return res.status(400).json({ 
+                        message: "သင်သည် ဤအတန်းအား ဝင်ရောက်ခွင့်ရရှိပြီး ဖြစ်ပါသည်။ သက်တမ်းမကုန်သေးမီ ထပ်မံပေးချေရန် မလိုအပ်ပါ။" 
+                    });
+                }
+                
+                // ✅ Validation 2: Pending ဖြစ်နေလျှင် (Admin အတည်ပြုဖို့ စောင့်နေဆဲ)
+                if (enrollment.status === 'pending') {
+                    return res.status(400).json({ 
+                        message: "သင်၏ ယခင်ငွေပေးချေမှုအား စစ်ဆေးနေဆဲဖြစ်ပါသည်။ Admin မှ အတည်ပြုသည်အထိ ခဏစောင့်ဆိုင်းပေးပါ။" 
+                    });
+                }
+
+                // သက်တမ်းကုန်သွားသည် (expired) သို့မဟုတ် ပယ်ချခံထားရသည် (rejected) ဆိုလျှင် သာ ထပ်မံပေးချေခွင့်ပြုမည်
+                enrollmentId = enrollment.id;
+                
+                // Status ကို ပြန်လည်စစ်ဆေးရန် pending သို့ ပြောင်းမည်
+                await pool.query(
+                    "UPDATE enrollments SET status = 'pending' WHERE id = $1", 
+                    [enrollmentId]
+                );
+
             } else {
+                // Enrollment အသစ်ဖန်တီးမည်
                 const newEnrollment = await pool.query(
                     "INSERT INTO enrollments (student_id, batch_id, joined_at, status) VALUES ($1, $2, CURRENT_DATE, 'pending') RETURNING id",
                     [studentId, batch_id]
@@ -156,11 +184,10 @@ router.post('/payments', upload.single('receipt_image'), async (req, res) => {
                 enrollmentId = newEnrollment.rows[0].id;
             }
         } else {
-            const lastEnrollment = await pool.query("SELECT id FROM enrollments WHERE student_id = $1 ORDER BY joined_at DESC LIMIT 1", [studentId]);
-            if (lastEnrollment.rows.length === 0) return res.status(400).json({ message: "No enrollment found." });
-            enrollmentId = lastEnrollment.rows[0].id;
+            return res.status(400).json({ message: "အတန်း (Batch ID) ရွေးချယ်ရန် လိုအပ်ပါသည်။" });
         }
         
+        // ၂။ Payment အသစ် ဖန်တီးမည်
         const newPayment = await pool.query(
             `INSERT INTO payments (enrollment_id, amount, payment_method, transaction_id, receipt_image, status, payment_date) 
              VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP) RETURNING *`, 
@@ -208,7 +235,7 @@ router.put('/profile/:id', upload.single('profile_image'), async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 10. Delete Student (ဒါက အမြဲတမ်း အောက်ဆုံးမှာ ရှိရပါမယ်)
+// 10. Delete Student
 router.delete('/:id', async (req, res) => {
     const client = await pool.connect();
     try {
