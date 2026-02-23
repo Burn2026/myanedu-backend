@@ -42,6 +42,7 @@ const verifyPaymentHandler = async (req, res) => {
                 [enrollmentId]
             );
             
+            // ✅ FIX: Noti ဝင်စေရန် သေချာအောင် ပြင်ဆင်ထားသည်
             try {
                 const info = await pool.query(
                     `SELECT e.student_id, b.batch_name, c.title FROM enrollments e 
@@ -50,16 +51,18 @@ const verifyPaymentHandler = async (req, res) => {
                 );
                 if (info.rows.length > 0) {
                     const { student_id, batch_name, title } = info.rows[0];
-                    await pool.query("INSERT INTO notifications (student_id, message, type) VALUES ($1, $2, 'success')", 
-                    [student_id, `✅ Payment verified for ${title} (${batch_name}).`]);
+                    await pool.query(
+                        "INSERT INTO notifications (student_id, message, type) VALUES ($1, $2, 'success')", 
+                        [student_id, `✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။ ${title} (${batch_name}) အတန်းအား စတင်တက်ရောက်နိုင်ပါပြီ။`]
+                    );
                 }
-            } catch (err) { console.error("Noti Error:", err.message); }
+            } catch (err) { console.error("Verify Noti Error:", err.message); }
         }
         res.json(paymentUpdate.rows[0]);
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- REJECT PAYMENT LOGIC ---
+// --- 2. REJECT PAYMENT LOGIC ---
 const rejectPaymentHandler = async (req, res) => {
     const client = await pool.connect();
     try {
@@ -83,6 +86,22 @@ const rejectPaymentHandler = async (req, res) => {
                 "UPDATE enrollments SET status = 'rejected', expire_date = (NOW() - INTERVAL '1 day') WHERE id = $1", 
                 [enrollmentId]
             );
+
+            // ✅ FIX: ငြင်းပယ်လိုက်ပါက ကျောင်းသားထံ Noti သွားစေရန် အသစ်ထည့်သွင်းထားသည်
+            try {
+                const info = await client.query(
+                    `SELECT e.student_id, b.batch_name, c.title FROM enrollments e 
+                     JOIN batches b ON e.batch_id = b.id JOIN courses c ON b.course_id = c.id WHERE e.id = $1`,
+                    [enrollmentId]
+                );
+                if (info.rows.length > 0) {
+                    const { student_id, batch_name, title } = info.rows[0];
+                    await client.query(
+                        "INSERT INTO notifications (student_id, message, type) VALUES ($1, $2, 'error')", 
+                        [student_id, `❌ ငွေပေးချေမှု ငြင်းပယ်ခံရပါသည်။ ${title} (${batch_name}) အတွက် ပြေစာအမှန်ကို ပြန်လည်တင်ပြပေးပါ။`]
+                    );
+                }
+            } catch (err) { console.error("Reject Noti Error:", err.message); }
         }
 
         await client.query('COMMIT');
@@ -204,7 +223,6 @@ router.delete('/lessons/:id', async (req, res) => {
     }
 });
 
-// ✅ (UPDATED) နောက်ဆုံးပို့ထားသော Message အားပါ ဆွဲထုတ်မည်
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
@@ -229,7 +247,6 @@ router.get('/discussions', async (req, res) => {
     }
 });
 
-// COMMENTS API (GET) - စာများကို ဆွဲထုတ်ရန်
 router.get('/comments', async (req, res) => {
     try {
         const { lesson_id } = req.query;
@@ -248,7 +265,6 @@ router.get('/comments', async (req, res) => {
     }
 });
 
-// COMMENTS API (POST) - Admin မှ စာပြန်ပို့ရန်
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, message, comment, user_role } = req.body;
@@ -268,7 +284,6 @@ router.post('/comments', async (req, res) => {
         res.status(201).json(result.rows[0]);
     } catch (err) {
         console.error("Post Comment Error:", err);
-        
         if (err.code === '42703' && err.message.includes('message')) {
             try {
                 const retryResult = await pool.query(`
