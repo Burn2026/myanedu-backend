@@ -90,25 +90,54 @@ router.post('/batches', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
+// ✅ (UPDATED) Edit Batch Route - Now handles Course Name updates
 router.put('/batches/:id', async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
-        const { batch_name, fees, status } = req.body;
-        await pool.query("UPDATE batches SET batch_name = $1, fees = $2, status = $3 WHERE id = $4", [batch_name, fees, status, id]);
-        res.json({ message: "Updated" });
-    } catch (err) { res.status(500).json(err.message); }
+        const { batch_name, fees, status, course_name } = req.body; 
+        
+        await client.query('BEGIN');
+
+        // 1. Update Batch details
+        await client.query(
+            "UPDATE batches SET batch_name = $1, fees = $2, status = $3 WHERE id = $4",
+            [batch_name, fees, status, id]
+        );
+
+        // 2. Update Course Name if provided (updates the linked course title)
+        if (course_name) {
+            // Update the title of the course associated with this batch
+            await client.query(
+                `UPDATE courses 
+                 SET title = $1 
+                 WHERE id = (SELECT course_id FROM batches WHERE id = $2)`,
+                [course_name, id]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.json({ message: "Batch and Course Updated Successfully" });
+    } catch (err) { 
+        await client.query('ROLLBACK');
+        console.error("Update Error:", err);
+        res.status(500).json({ message: err.message }); 
+    } finally {
+        client.release();
+    }
 });
 
-// ✅ (NEW) Delete Batch Route - အတန်းဖျက်ရန်
+// ✅ (NEW) Delete Batch Route
 router.delete('/batches/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        // အတန်းဖျက်လျှင် ၎င်းနှင့်သက်ဆိုင်သော Data များကို FK constraints ကြောင့် မဖျက်နိုင်လျှင် Error ပြမည်
+        // Deleting a batch might fail due to Foreign Key constraints if students are enrolled.
+        // The frontend should handle this error gracefully.
         await pool.query("DELETE FROM batches WHERE id = $1", [id]);
         res.json({ message: "Batch deleted successfully" });
     } catch (err) {
         console.error("Delete Batch Error:", err);
-        res.status(500).json({ message: "ဤအတန်းတွင် ကျောင်းသားများ ရှိနေသောကြောင့် ဖျက်၍မရပါ။ Status ကို Closed သို့သာ ပြောင်းပါ။" });
+        res.status(500).json({ message: "Cannot delete batch. It may have enrolled students. Try changing status to Closed." });
     }
 });
 
