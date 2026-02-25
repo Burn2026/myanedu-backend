@@ -66,7 +66,7 @@ const rejectPaymentHandler = async (req, res) => {
     } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ message: err.message }); } finally { client.release(); }
 };
 
-// --- ROUTES ---
+// --- BATCH MANAGEMENT ROUTES (Updated) ---
 router.get('/batches', async (req, res) => {
     try {
         const result = await pool.query(`SELECT b.*, c.title as course_name, (SELECT COUNT(*) FROM lessons l WHERE l.batch_id::text = b.id::text) as lesson_count FROM batches b JOIN courses c ON b.course_id = c.id ORDER BY b.created_at DESC`);
@@ -99,6 +99,20 @@ router.put('/batches/:id', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
+// ✅ (NEW) Delete Batch Route - အတန်းဖျက်ရန်
+router.delete('/batches/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        // အတန်းဖျက်လျှင် ၎င်းနှင့်သက်ဆိုင်သော Data များကို FK constraints ကြောင့် မဖျက်နိုင်လျှင် Error ပြမည်
+        await pool.query("DELETE FROM batches WHERE id = $1", [id]);
+        res.json({ message: "Batch deleted successfully" });
+    } catch (err) {
+        console.error("Delete Batch Error:", err);
+        res.status(500).json({ message: "ဤအတန်းတွင် ကျောင်းသားများ ရှိနေသောကြောင့် ဖျက်၍မရပါ။ Status ကို Closed သို့သာ ပြောင်းပါ။" });
+    }
+});
+
+// --- OTHER ROUTES ---
 router.get('/students', async (req, res) => {
     try {
         const result = await pool.query("SELECT * FROM students ORDER BY created_at DESC");
@@ -146,8 +160,7 @@ router.delete('/lessons/:id', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// ✅ (UPDATED) Discussions Route: Group by Lesson AND Student Name
-// ဤနေရာတွင် ကျောင်းသားတစ်ဦးချင်းစီအလိုက် Thread ခွဲထုတ်ပေးသည်
+// DISCUSSIONS & COMMENTS (GROUP BY STUDENT)
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
@@ -176,7 +189,6 @@ router.get('/discussions', async (req, res) => {
     }
 });
 
-// ✅ (UPDATED) Comments Route: Support Filtering by Student Name
 router.get('/comments', async (req, res) => {
     try {
         const { lesson_id, student_name } = req.query;
@@ -185,7 +197,6 @@ router.get('/comments', async (req, res) => {
         let query = `SELECT * FROM comments WHERE lesson_id = $1`;
         let params = [lesson_id];
 
-        // အကယ်၍ ကျောင်းသားနာမည်ပါလာလျှင် ထိုကျောင်းသား၏ စာများကိုသာ (Admin စာများအပါအဝင်) ဆွဲထုတ်မည်
         if (student_name) {
             query += ` AND (user_name = $2 OR user_role = 'admin')`;
             params.push(student_name);
@@ -201,7 +212,6 @@ router.get('/comments', async (req, res) => {
     }
 });
 
-// ✅ (UPDATED) Admin Reply: No changes needed, Admin replies are generally visible in thread
 router.post('/comments', async (req, res) => {
     try {
         const { lesson_id, message, comment, user_role } = req.body;
