@@ -186,7 +186,7 @@ router.delete('/lessons/:id', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// ✅ (UPDATED) DISCUSSIONS & COMMENTS (GROUP BY STUDENT with Profile Image & Course Name)
+// ✅ (UPDATED) DISCUSSIONS & COMMENTS
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
@@ -196,7 +196,7 @@ router.get('/discussions', async (req, res) => {
                 l.id as lesson_id, 
                 l.title as lesson_title, 
                 b.batch_name, 
-                co.title as course_name, -- ✅ Course Name ပါ ဆွဲထုတ်ထားပါသည်
+                co.title as course_name, 
                 COUNT(c.id) as total_comments,
                 MAX(c.created_at) as last_message_time,
                 (SELECT message FROM comments 
@@ -205,7 +205,7 @@ router.get('/discussions', async (req, res) => {
             FROM comments c
             JOIN lessons l ON c.lesson_id = l.id
             LEFT JOIN batches b ON l.batch_id = b.id::text 
-            LEFT JOIN courses co ON b.course_id = co.id -- ✅ Courses Table နှင့် Join ထားပါသည်
+            LEFT JOIN courses co ON b.course_id = co.id 
             LEFT JOIN students s ON c.user_name = s.name 
             WHERE c.user_role = 'student' 
             GROUP BY c.user_name, l.id, l.title, b.batch_name, co.title
@@ -271,27 +271,64 @@ router.post('/comments', async (req, res) => {
     }
 });
 
+// ============================================
+// ✅ EXAMS API (GET, POST, DELETE) - UPDATED
+// ============================================
 router.get('/exams', async (req, res) => {
     try {
-        const result = await pool.query(`SELECT er.*, s.name as student_name, b.batch_name FROM exam_results er JOIN enrollments e ON er.enrollment_id = e.id JOIN students s ON e.student_id = s.id JOIN batches b ON e.batch_id = b.id`);
+        const result = await pool.query(`
+            SELECT er.*, s.name as student_name, b.batch_name, c.title as course_name
+            FROM exam_results er 
+            JOIN enrollments e ON er.enrollment_id = e.id 
+            JOIN students s ON e.student_id = s.id 
+            JOIN batches b ON e.batch_id = b.id
+            JOIN courses c ON b.course_id = c.id
+            ORDER BY er.result_date DESC
+        `);
         res.json(result.rows);
     } catch (err) { res.status(500).send("Error"); }
 });
 
-router.get('/fix-database', async (req, res) => {
+router.post('/exams', async (req, res) => {
     try {
-        await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(50)");
-        res.send("✅ Database Fixed!");
-    } catch (err) { res.status(500).send(err.message); }
+        const { enrollment_id, exam_title, marks_obtained, total_marks, grade } = req.body;
+        
+        if (!enrollment_id || !exam_title || !marks_obtained) {
+            return res.status(400).json({ message: "အချက်အလက်များ ပြည့်စုံစွာ ထည့်သွင်းပေးပါ။" });
+        }
+
+        const result = await pool.query(
+            `INSERT INTO exam_results (enrollment_id, exam_title, marks_obtained, total_marks, grade, result_date) 
+             VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) RETURNING *`,
+            [enrollment_id, exam_title, marks_obtained, total_marks || 100, grade]
+        );
+
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        console.error("Add Exam Error:", err);
+        res.status(500).json({ message: "Server error while saving exam result." });
+    }
 });
 
+router.delete('/exams/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query("DELETE FROM exam_results WHERE id = $1", [id]);
+        res.json({ message: "Deleted successfully" });
+    } catch (err) {
+        console.error("Delete Exam Error:", err);
+        res.status(500).json({ message: "Server error while deleting exam result." });
+    }
+});
+
+// ============================================
 // ✅ (NEW) GET Student Enrolled Batches by Phone (For Exam Results)
+// ============================================
 router.get('/student-batches', async (req, res) => {
     try {
         const { phone } = req.query;
         if (!phone) return res.status(400).json({ message: "Phone is required" });
 
-        // ကျောင်းသားရဲ့ ဖုန်းနံပါတ်ကိုသုံးပြီး သူတက်နေတဲ့/တက်ခဲ့တဲ့ (active or expired) အတန်းတွေကို ရှာမည်
         const query = `
             SELECT 
                 e.id as enrollment_id, 
@@ -309,6 +346,13 @@ router.get('/student-batches', async (req, res) => {
         console.error("Fetch Student Batches Error:", err);
         res.status(500).json({ message: "Server Error" });
     }
+});
+
+router.get('/fix-database', async (req, res) => {
+    try {
+        await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(50)");
+        res.send("✅ Database Fixed!");
+    } catch (err) { res.status(500).send(err.message); }
 });
 
 module.exports = router;
