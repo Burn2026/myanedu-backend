@@ -285,4 +285,30 @@ router.get('/fix-database', async (req, res) => {
     } catch (err) { res.status(500).send(err.message); }
 });
 
+// ✅ (NEW) GET Student Enrolled Batches by Phone (For Exam Results)
+router.get('/student-batches', async (req, res) => {
+    try {
+        const { phone } = req.query;
+        if (!phone) return res.status(400).json({ message: "Phone is required" });
+
+        // ကျောင်းသားရဲ့ ဖုန်းနံပါတ်ကိုသုံးပြီး သူတက်နေတဲ့/တက်ခဲ့တဲ့ (active or expired) အတန်းတွေကို ရှာမည်
+        const query = `
+            SELECT 
+                e.id as enrollment_id, 
+                c.title as course_name, 
+                b.batch_name 
+            FROM enrollments e
+            JOIN students s ON e.student_id = s.id
+            JOIN batches b ON e.batch_id = b.id
+            JOIN courses c ON b.course_id = c.id
+            WHERE s.phone_primary = $1 AND e.status IN ('active', 'expired')
+        `;
+        const result = await pool.query(query, [phone]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Fetch Student Batches Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+});
+
 module.exports = router;
