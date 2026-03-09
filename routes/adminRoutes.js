@@ -186,16 +186,17 @@ router.delete('/lessons/:id', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// ✅ (UPDATED) DISCUSSIONS & COMMENTS (GROUP BY STUDENT with Profile Image)
+// ✅ (UPDATED) DISCUSSIONS & COMMENTS (GROUP BY STUDENT with Profile Image & Course Name)
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
             SELECT 
                 c.user_name as student_name,
-                MAX(s.profile_image) as profile_image, -- ✅ Fetch student's profile image
+                MAX(s.profile_image) as profile_image,
                 l.id as lesson_id, 
                 l.title as lesson_title, 
                 b.batch_name, 
+                co.title as course_name, -- ✅ Course Name ပါ ဆွဲထုတ်ထားပါသည်
                 COUNT(c.id) as total_comments,
                 MAX(c.created_at) as last_message_time,
                 (SELECT message FROM comments 
@@ -204,9 +205,10 @@ router.get('/discussions', async (req, res) => {
             FROM comments c
             JOIN lessons l ON c.lesson_id = l.id
             LEFT JOIN batches b ON l.batch_id = b.id::text 
-            LEFT JOIN students s ON c.user_name = s.name -- ✅ Join with students table
+            LEFT JOIN courses co ON b.course_id = co.id -- ✅ Courses Table နှင့် Join ထားပါသည်
+            LEFT JOIN students s ON c.user_name = s.name 
             WHERE c.user_role = 'student' 
-            GROUP BY c.user_name, l.id, l.title, b.batch_name
+            GROUP BY c.user_name, l.id, l.title, b.batch_name, co.title
             ORDER BY last_message_time DESC
         `;
         const result = await pool.query(query);
