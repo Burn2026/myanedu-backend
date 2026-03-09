@@ -90,7 +90,7 @@ router.post('/batches', async (req, res) => {
     } catch (err) { res.status(500).json(err.message); }
 });
 
-// ✅ (UPDATED) Edit Batch Route - Now handles Course Name updates
+// ✅ Edit Batch Route - Now handles Course Name updates
 router.put('/batches/:id', async (req, res) => {
     const client = await pool.connect();
     try {
@@ -105,9 +105,8 @@ router.put('/batches/:id', async (req, res) => {
             [batch_name, fees, status, id]
         );
 
-        // 2. Update Course Name if provided (updates the linked course title)
+        // 2. Update Course Name if provided
         if (course_name) {
-            // Update the title of the course associated with this batch
             await client.query(
                 `UPDATE courses 
                  SET title = $1 
@@ -127,12 +126,10 @@ router.put('/batches/:id', async (req, res) => {
     }
 });
 
-// ✅ (NEW) Delete Batch Route
+// ✅ Delete Batch Route
 router.delete('/batches/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        // Deleting a batch might fail due to Foreign Key constraints if students are enrolled.
-        // The frontend should handle this error gracefully.
         await pool.query("DELETE FROM batches WHERE id = $1", [id]);
         res.json({ message: "Batch deleted successfully" });
     } catch (err) {
@@ -189,12 +186,13 @@ router.delete('/lessons/:id', async (req, res) => {
     } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// DISCUSSIONS & COMMENTS (GROUP BY STUDENT)
+// ✅ (UPDATED) DISCUSSIONS & COMMENTS (GROUP BY STUDENT with Profile Image)
 router.get('/discussions', async (req, res) => {
     try {
         const query = `
             SELECT 
                 c.user_name as student_name,
+                MAX(s.profile_image) as profile_image, -- ✅ Fetch student's profile image
                 l.id as lesson_id, 
                 l.title as lesson_title, 
                 b.batch_name, 
@@ -206,6 +204,7 @@ router.get('/discussions', async (req, res) => {
             FROM comments c
             JOIN lessons l ON c.lesson_id = l.id
             LEFT JOIN batches b ON l.batch_id = b.id::text 
+            LEFT JOIN students s ON c.user_name = s.name -- ✅ Join with students table
             WHERE c.user_role = 'student' 
             GROUP BY c.user_name, l.id, l.title, b.batch_name
             ORDER BY last_message_time DESC
